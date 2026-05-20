@@ -1,0 +1,12 @@
+###############################################################################
+# ClusterIssuer Self-Signed (para labs sin dominio propio)
+###############################################################################
+# Genera certificados TLS que NO son válidos para browsers (muestra advertencia)
+# pero sirven para practicar HTTPS sin necesitar un dominio.
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}

@@ -1,0 +1,91 @@
+###############################################################################
+# kube-prometheus-stack - EKS con Fargate
+###############################################################################
+
+grafana:
+  enabled: true
+  adminUser: admin
+  adminPassword: "DevOps2024!"
+
+  # Para que funcione detrás del Ingress con subpath /grafana
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/grafana"
+      serve_from_sub_path: true
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: gp2
+
+  defaultDashboardsEnabled: true
+  defaultDashboardsTimezone: America/Bogota
+
+prometheus:
+  prometheusSpec:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    retention: 7d
+    retentionSize: "8GB"
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+    # Ruta base para funcionar con Ingress subpath
+    routePrefix: /prometheus
+    externalUrl: /prometheus
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# node-exporter NO funciona en Fargate (necesita DaemonSet)
+nodeExporter:
+  enabled: false
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 400m
+      memory: 512Mi

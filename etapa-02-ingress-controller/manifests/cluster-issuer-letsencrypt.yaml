@@ -1,0 +1,26 @@
+###############################################################################
+# ClusterIssuer Let's Encrypt (para cuando tengas dominio propio)
+###############################################################################
+# SOLO usar si tienes un dominio real apuntando al Load Balancer.
+# Let's Encrypt da certificados GRATIS y válidos para browsers.
+#
+# Pasos:
+# 1. Comprar dominio (Route53: $10-12/año para .com)
+# 2. Crear registro CNAME: *.tu-dominio.com → DNS-del-NLB
+# 3. Cambiar el email abajo
+# 4. kubectl apply -f cluster-issuer-letsencrypt.yaml
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: tu-email@ejemplo.com  # ← CAMBIAR
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx

@@ -1,0 +1,47 @@
+###############################################################################
+# NGINX Ingress Controller - EKS con Fargate
+###############################################################################
+
+controller:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  replicaCount: 2
+
+  # NLB internet-facing (accesible desde cualquier navegador)
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    type: LoadBalancer
+
+  # Métricas para Prometheus (etapa 3)
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false  # Se habilita en etapa 3
+
+  # Configuración global
+  config:
+    use-forwarded-headers: "true"
+    proxy-body-size: "50m"
+    proxy-read-timeout: "120"
+
+  admissionWebhooks:
+    enabled: true
+
+defaultBackend:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi

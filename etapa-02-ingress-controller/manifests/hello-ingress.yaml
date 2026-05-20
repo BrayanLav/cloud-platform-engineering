@@ -1,0 +1,24 @@
+###############################################################################
+# Ingress para la app de prueba
+# Esto le dice a NGINX: "todo el tráfico que llegue a /, mándalo a hello-app"
+###############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello-app
+  namespace: apps
+  annotations:
+    # Usar NGINX como ingress controller
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    # Sin host = acepta cualquier request (perfecto para DNS de AWS)
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello-app
+                port:
+                  number: 80

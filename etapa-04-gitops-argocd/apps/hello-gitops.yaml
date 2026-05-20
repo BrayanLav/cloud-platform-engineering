@@ -1,0 +1,37 @@
+###############################################################################
+# ArgoCD Application - Hello GitOps
+###############################################################################
+# Le dice a ArgoCD: "despliega lo que está en manifests/hello-gitops/"
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-gitops
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    # ⚠️ CAMBIAR por tu repo
+    repoURL: https://github.com/TU_USUARIO/cloud-platform-engineering.git
+    targetRevision: main
+    path: etapa-04-gitops-argocd/manifests/hello-gitops
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps
+
+  syncPolicy:
+    automated:
+      prune: true       # Elimina recursos que ya no están en Git
+      selfHeal: true    # Revierte cambios manuales en el cluster
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,86 @@
+###############################################################################
+# App de prueba para verificar que el Ingress funciona
+###############################################################################
+# BUENAS PRÁCTICAS aplicadas:
+# - Labels estándar de Kubernetes (app.kubernetes.io/*)
+# - Resource requests Y limits (obligatorio en Fargate)
+# - Probes de salud (liveness + readiness)
+# - Security context (no correr como root)
+# - Réplicas > 1 para alta disponibilidad
+###############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-app
+  namespace: apps
+  labels:
+    app.kubernetes.io/name: hello-app
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: cloud-platform
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hello-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hello-app
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: cloud-platform
+    spec:
+      # BUENA PRÁCTICA: No correr como root
+      securityContext:
+        runAsNonRoot: false  # http-echo necesita root, en apps reales usar true
+      containers:
+        - name: hello
+          image: hashicorp/http-echo:0.2.3
+          args:
+            - "-text=Hola desde EKS! La plataforma funciona. 🚀"
+          ports:
+            - containerPort: 5678
+              name: http
+              protocol: TCP
+          # BUENA PRÁCTICA: Siempre definir resources
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          # BUENA PRÁCTICA: Probes de salud
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-app
+  namespace: apps
+  labels:
+    app.kubernetes.io/name: hello-app
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: hello-app

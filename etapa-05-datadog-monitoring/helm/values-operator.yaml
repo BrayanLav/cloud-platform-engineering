@@ -1,0 +1,16 @@
+###############################################################################
+# Datadog Operator - EKS con Fargate
+###############################################################################
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 400m
+    memory: 512Mi
+
+datadogAgent:
+  enabled: false  # Lo creamos con el CRD manualmente
+
+watchNamespaces: []
