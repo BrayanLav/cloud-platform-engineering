@@ -101,11 +101,70 @@ terraform/
 
 ---
 
-## Paso 5: Entender los archivos Terraform
+## Paso 5: Entender QUÉ estamos creando y POR QUÉ
 
-Abre cada archivo y lee los comentarios. Aquí te explico qué hace cada uno:
+Antes de ejecutar Terraform, necesitas entender qué va a crear y por qué cada
+pieza es necesaria. Lee esta sección completa antes de hacer `terraform apply`.
 
-### `versions.tf` — Versiones pinneadas
+### La arquitectura completa
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            TU CUENTA AWS                                 │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    VPC (10.0.0.0/16)                               │  │
+│  │         "Tu red privada virtual en AWS"                           │  │
+│  │                                                                   │  │
+│  │  ┌─────────────────────────────────────────────────────────────┐  │  │
+│  │  │              SUBNETS PÚBLICAS (3 AZs)                        │  │  │
+│  │  │  Tienen ruta directa a internet via Internet Gateway         │  │  │
+│  │  │  Aquí viven: Load Balancers (NLB)                           │  │  │
+│  │  │                                                             │  │  │
+│  │  │  10.0.101.0/24 (us-east-1a)                                 │  │  │
+│  │  │  10.0.102.0/24 (us-east-1b)                                 │  │  │
+│  │  │  10.0.103.0/24 (us-east-1c)                                 │  │  │
+│  │  └─────────────────────────────────────────────────────────────┘  │  │
+│  │                          │                                        │  │
+│  │                    NAT Gateway                                     │  │
+│  │              (permite salir a internet                            │  │
+│  │               desde subnets privadas)                             │  │
+│  │                          │                                        │  │
+│  │  ┌─────────────────────────────────────────────────────────────┐  │  │
+│  │  │              SUBNETS PRIVADAS (3 AZs)                        │  │  │
+│  │  │  NO tienen ruta directa a internet (más seguro)              │  │  │
+│  │  │  Salen a internet SOLO via NAT Gateway                      │  │  │
+│  │  │  Aquí viven: Todos tus pods de Fargate                      │  │  │
+│  │  │                                                             │  │  │
+│  │  │  10.0.1.0/24 (us-east-1a)                                   │  │  │
+│  │  │  10.0.2.0/24 (us-east-1b)                                   │  │  │
+│  │  │  10.0.3.0/24 (us-east-1c)                                   │  │  │
+│  │  │                                                             │  │  │
+│  │  │  ┌─────────────────────────────────────────────────────┐   │  │  │
+│  │  │  │              EKS CLUSTER                             │   │  │  │
+│  │  │  │                                                     │   │  │  │
+│  │  │  │  Control Plane (gestionado por AWS):                │   │  │  │
+│  │  │  │    • API Server (recibe tus kubectl)                │   │  │  │
+│  │  │  │    • etcd (base de datos del cluster)               │   │  │  │
+│  │  │  │    • Scheduler (decide dónde poner pods)            │   │  │  │
+│  │  │  │                                                     │   │  │  │
+│  │  │  │  Fargate Profiles:                                  │   │  │  │
+│  │  │  │    • kube-system → CoreDNS                          │   │  │  │
+│  │  │  │    • apps → tus aplicaciones                        │   │  │  │
+│  │  │  │    • ingress-nginx → Ingress Controller             │   │  │  │
+│  │  │  │    • cert-manager → certificados TLS                │   │  │  │
+│  │  │  │    • monitoring → Prometheus/Grafana                │   │  │  │
+│  │  │  │    • argocd → ArgoCD                                │   │  │  │
+│  │  │  │    • datadog → Datadog Agent                        │   │  │  │
+│  │  │  └─────────────────────────────────────────────────────┘   │  │  │
+│  │  └─────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### `versions.tf` — Qué versiones usar
 
 ```hcl
 terraform {
@@ -125,6 +184,8 @@ terraform {
 > Si sale una versión nueva con breaking changes, tu código sigue funcionando.
 > Sin esto, un `terraform init` podría descargar una versión incompatible
 > y romper todo.
+
+---
 
 ### `variables.tf` — Variables con validación
 
@@ -148,70 +209,268 @@ variable "cluster_name" {
 > críptico de AWS. Con validación, falla INMEDIATAMENTE y te dice exactamente
 > qué está mal. Ahorra tiempo y frustración.
 
-### `vpc.tf` — La red
+---
 
-Usa el módulo oficial `terraform-aws-modules/vpc/aws` que crea:
-- VPC con el CIDR que definas
-- 3 subnets públicas (una por AZ) → para Load Balancers
-- 3 subnets privadas (una por AZ) → para tus pods
-- Internet Gateway → para que las subnets públicas tengan internet
-- NAT Gateway → para que las subnets privadas puedan salir a internet
-- Route Tables → reglas de tráfico
+### `vpc.tf` — La red (explicado línea por línea)
 
-> **🏆 Buena práctica: Usar módulos oficiales en vez de escribir todo a mano.**
+**¿Qué es una VPC?** Tu red privada en AWS. Es como tu propia "LAN" en la nube.
+Todo recurso (pods, load balancers, bases de datos) vive dentro de una VPC.
+
+**¿Por qué subnets públicas Y privadas?**
+- **Públicas:** Tienen ruta directa a internet. Aquí pones cosas que NECESITAN
+  ser accesibles desde afuera (Load Balancers).
+- **Privadas:** NO tienen ruta directa a internet. Nadie de internet puede
+  llegar a ellas directamente. Aquí pones tus pods (más seguro).
+
+**¿Por qué 3 de cada una?** Una por Availability Zone (AZ). Si una AZ se cae
+(pasa en AWS), tus pods siguen corriendo en las otras 2. Es alta disponibilidad.
+
+**¿Qué es el NAT Gateway?** Permite que los pods en subnets privadas SALGAN
+a internet (para descargar imágenes Docker, por ejemplo) sin ser accesibles
+DESDE internet. Es como un proxy de salida.
+
+```hcl
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.5"
+
+  name = "${var.cluster_name}-vpc"
+  cidr = var.vpc_cidr                    # 10.0.0.0/16 = 65,536 IPs disponibles
+
+  # Usar 3 AZs para alta disponibilidad
+  azs             = slice(data.aws_availability_zones.available.names, 0, 3)
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]    # 256 IPs c/u
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+  # NAT Gateway: permite que pods en subnets privadas accedan a internet
+  enable_nat_gateway   = true
+  single_nat_gateway   = true   # Solo 1 NAT para ahorrar ($0.045/hr por cada uno)
+  enable_dns_hostnames = true   # Necesario para que EKS funcione
+  enable_dns_support   = true
+
+  # Tags OBLIGATORIOS para que EKS descubra las subnets automáticamente
+  # Sin estos tags, EKS no sabe dónde poner los Load Balancers
+  public_subnet_tags = {
+    "kubernetes.io/role/elb"                    = 1    # "Pon LBs públicos aquí"
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb"           = 1    # "Pon LBs internos aquí"
+    "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+  }
+}
+```
+
+> **🏆 Buena práctica: `single_nat_gateway = true` para labs.**
 >
-> El módulo `terraform-aws-modules/vpc/aws` tiene 5+ años de desarrollo,
-> miles de usuarios y cientos de bugs corregidos. Escribir una VPC desde cero
-> son ~200 líneas de código donde es fácil olvidar algo (como los tags que
-> EKS necesita en las subnets). El módulo lo hace todo en 20 líneas.
+> En producción usarías un NAT Gateway por AZ (3 total = $0.135/hr).
+> Para labs, uno solo es suficiente y ahorra $0.09/hr. Si la AZ del NAT
+> se cae, los pods pierden internet temporalmente, pero para un lab no importa.
 
-### `eks.tf` — El cluster
+> **🏆 Buena práctica: Tags de Kubernetes en las subnets.**
+>
+> EKS necesita estos tags para saber dónde crear Load Balancers automáticamente.
+> Sin `kubernetes.io/role/elb = 1` en las subnets públicas, cuando crees un
+> Service tipo LoadBalancer, EKS no sabrá en qué subnet ponerlo y fallará.
 
-Usa el módulo `terraform-aws-modules/eks/aws` que crea:
-- El cluster EKS (control plane)
-- Fargate Profiles (uno por cada namespace que usaremos)
-- Add-ons (CoreDNS, kube-proxy, vpc-cni)
-- IAM roles con permisos mínimos
+---
 
-Los **Fargate Profiles** son clave. Le dicen a EKS: "los pods que se creen
-en el namespace X, córrelos en Fargate". Si un pod se crea en un namespace
-que NO tiene profile, se queda en `Pending` para siempre.
+### `eks.tf` — El cluster EKS y Fargate (explicado a detalle)
 
-Por eso creamos profiles para todos los namespaces que usaremos:
-- `kube-system` → pods del sistema (CoreDNS)
-- `apps` → tus aplicaciones
-- `monitoring` → Prometheus/Grafana (etapa 3)
-- `argocd` → ArgoCD (etapa 4)
-- `ingress-nginx` → Ingress Controller (etapa 2)
-- `cert-manager` → Certificados TLS (etapa 2)
-- `datadog` → Datadog (etapa 5)
+**¿Qué es EKS?** Kubernetes administrado por AWS. Tú no instalas ni mantienes
+el control plane (API server, etcd, scheduler). AWS lo hace y te cobra $0.10/hr.
 
-### `main.tf` — Providers
+**¿Qué es Fargate?** En vez de tener servidores EC2 como nodos de Kubernetes,
+AWS corre cada pod en su propia micro-VM aislada. No gestionas servidores.
 
-Configura cómo Terraform se conecta a AWS y a Kubernetes.
+**¿Qué es un Fargate Profile?** Una regla que dice: "todos los pods que se creen
+en el namespace X, córrelos en Fargate". Sin un profile que matchee, el pod
+se queda en `Pending` para siempre (Kubernetes no sabe dónde ponerlo).
+
+```hcl
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.8"
+
+  cluster_name    = var.cluster_name      # "platform-cluster"
+  cluster_version = var.cluster_version   # "1.29"
+
+  # Endpoint público = puedes usar kubectl desde tu laptop via internet
+  # En producción pondrías esto en false y usarías VPN
+  cluster_endpoint_public_access = true
+
+  # Add-ons: componentes esenciales que EKS necesita para funcionar
+  cluster_addons = {
+    # CoreDNS: resuelve nombres dentro del cluster
+    # (para que un pod pueda hablar con otro por nombre, ej: "mi-servicio.apps")
+    coredns = {
+      configuration_values = jsonencode({
+        computeType = "Fargate"   # Decirle a CoreDNS que corre en Fargate
+      })
+    }
+    # kube-proxy: reglas de red para que los Services funcionen
+    kube-proxy = {}
+    # vpc-cni: asigna IPs de la VPC a cada pod (networking de AWS)
+    vpc-cni = {}
+  }
+
+  # En qué VPC y subnets corre el cluster
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets   # Pods corren en subnets PRIVADAS
+```
+
+**Fargate Profiles — La parte más importante:**
+
+```hcl
+  fargate_profiles = {
+    # ──────────────────────────────────────────────────────────────────
+    # Profile: system
+    # Para: pods del sistema de Kubernetes (CoreDNS, kube-proxy)
+    # Sin esto: el cluster no arranca (CoreDNS no tiene dónde correr)
+    # ──────────────────────────────────────────────────────────────────
+    system = {
+      name = "system"
+      selectors = [
+        { namespace = "kube-system" }
+      ]
+    }
+
+    # ──────────────────────────────────────────────────────────────────
+    # Profile: ingress
+    # Para: NGINX Ingress Controller y cert-manager (etapa 2)
+    # Sin esto: no puedes exponer servicios al exterior
+    # Nota: un profile puede tener múltiples selectors (namespaces)
+    # ──────────────────────────────────────────────────────────────────
+    ingress = {
+      name = "ingress"
+      selectors = [
+        { namespace = "ingress-nginx" },
+        { namespace = "cert-manager" }
+      ]
+    }
+
+    # ──────────────────────────────────────────────────────────────────
+    # Profile: monitoring
+    # Para: Prometheus, Grafana, Alertmanager (etapa 3)
+    # Sin esto: los pods de monitoreo quedan en Pending
+    # ──────────────────────────────────────────────────────────────────
+    monitoring = {
+      name = "monitoring"
+      selectors = [
+        { namespace = "monitoring" }
+      ]
+    }
+
+    # ──────────────────────────────────────────────────────────────────
+    # Profile: argocd
+    # Para: ArgoCD server, repo-server, controller, redis (etapa 4)
+    # Sin esto: no puedes instalar ArgoCD
+    # ──────────────────────────────────────────────────────────────────
+    argocd = {
+      name = "argocd"
+      selectors = [
+        { namespace = "argocd" }
+      ]
+    }
+
+    # ──────────────────────────────────────────────────────────────────
+    # Profile: datadog
+    # Para: Datadog Operator y Agent (etapa 5)
+    # ──────────────────────────────────────────────────────────────────
+    datadog = {
+      name = "datadog"
+      selectors = [
+        { namespace = "datadog" }
+      ]
+    }
+
+    # ──────────────────────────────────────────────────────────────────
+    # Profile: apps
+    # Para: tus aplicaciones (lo que tú despliegues)
+    # Este es el namespace donde pones tus cosas
+    # ──────────────────────────────────────────────────────────────────
+    apps = {
+      name = "apps"
+      selectors = [
+        { namespace = "apps" }
+      ]
+    }
+  }
+}
+```
+
+> **¿Cómo funciona el matching de Fargate Profiles?**
+>
+> Cuando creas un pod, EKS revisa todos los Fargate Profiles en orden:
+> 1. ¿El namespace del pod coincide con algún selector? → SÍ → corre en Fargate
+> 2. ¿No coincide con ninguno? → el pod queda en `Pending` para siempre
+>
+> Por eso creamos un profile por cada namespace que vamos a usar.
+> Si mañana quieres agregar un namespace nuevo (ej: "staging"), necesitas
+> agregar un Fargate Profile para él en este archivo y hacer `terraform apply`.
+
+> **¿Por qué no un solo profile con `namespace = "*"` (todos)?**
+>
+> Fargate no soporta wildcards. Cada namespace debe estar explícito.
+> Además, tener profiles separados te da control: podrías tener un profile
+> con instancias más grandes para "monitoring" y más pequeñas para "apps".
+
+> **🏆 Buena práctica: Crear los Fargate Profiles desde el inicio.**
+>
+> Si creas el cluster sin profiles y luego intentas instalar Prometheus,
+> los pods quedan en Pending y no sabes por qué. Mejor crear todos los
+> profiles que vas a necesitar desde el principio (es gratis, no cuestan nada).
+
+---
+
+### `main.tf` — Providers (cómo Terraform se conecta)
+
+```hcl
+provider "aws" {
+  region = var.aws_region
+
+  # Tags que se agregan AUTOMÁTICAMENTE a todo recurso creado
+  default_tags {
+    tags = var.tags
+  }
+}
+
+# Provider de Kubernetes: para que Terraform pueda configurar cosas dentro del cluster
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+
+  # Usa AWS CLI para autenticarse (mismo mecanismo que kubectl)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", var.cluster_name]
+  }
+}
+```
 
 > **🏆 Buena práctica: Tags por defecto en el provider.**
 >
-> ```hcl
-> provider "aws" {
->   default_tags {
->     tags = var.tags
->   }
-> }
-> ```
->
-> Esto agrega tags automáticamente a TODOS los recursos sin tener que
-> ponerlos uno por uno. Útil para:
-> - Saber quién creó qué (cuando llega la factura)
-> - Filtrar en AWS Cost Explorer por proyecto
-> - Identificar recursos huérfanos
+> `default_tags` agrega tags a TODOS los recursos sin tener que ponerlos
+> uno por uno. Cuando llega la factura de AWS, puedes filtrar por
+> `Project = cloud-platform-engineering` y ver exactamente cuánto gastaste.
 
-### `outputs.tf` — Información post-apply
+---
 
-Después de `terraform apply`, Terraform muestra estos valores:
-- Nombre del cluster
-- Comando para configurar kubectl
-- Fargate profiles creados
+### `outputs.tf` — Qué te muestra al terminar
+
+Después de `terraform apply`, Terraform imprime estos valores:
+
+```hcl
+output "configure_kubectl" {
+  value = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region}"
+}
+```
+
+Así no tienes que recordar el comando. Terraform te lo da listo para copiar y pegar.
+
+---
 
 ### `backend.tf` — Remote state (opcional pero recomendado)
 
