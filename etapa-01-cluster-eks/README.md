@@ -446,23 +446,63 @@ Si llegaste hasta aquí, tienes:
 
 ## 🔴 Destruir (cuando termines TODAS las etapas del día)
 
+> ⚠️ **IMPORTANTE: No hagas `terraform destroy` directamente.**
+>
+> Kubernetes crea Load Balancers (NLB/ALB) que viven en tu VPC pero Terraform
+> no sabe que existen (porque los creó Kubernetes, no Terraform). Si haces
+> `terraform destroy` sin eliminarlos primero, falla con un error tipo:
+> `"DependencyViolation: VPC has dependencies and cannot be deleted"`.
+>
+> **Siempre elimina los recursos de Kubernetes ANTES de destruir con Terraform.**
+
 ```bash
-# PRIMERO: eliminar lo que instalaste con Helm (etapas 2-5)
+# PASO 1: Eliminar Services tipo LoadBalancer (esto borra los NLB/ALB en AWS)
+kubectl delete svc ingress-nginx-controller -n ingress-nginx 2>/dev/null
+kubectl delete ingress --all-namespaces --all 2>/dev/null
+
+# PASO 2: Desinstalar Helm releases
 helm uninstall ingress-nginx -n ingress-nginx 2>/dev/null
 helm uninstall cert-manager -n cert-manager 2>/dev/null
 helm uninstall monitoring -n monitoring 2>/dev/null
 helm uninstall argocd -n argocd 2>/dev/null
 helm uninstall datadog-operator -n datadog 2>/dev/null
 
-# Esperar 30 seg (para que se eliminen Load Balancers)
-sleep 30
+# PASO 3: Esperar a que AWS elimine los Load Balancers (~60 seg)
+echo "Esperando que AWS elimine los LBs..."
+sleep 60
 
-# LUEGO: destruir la infraestructura base
+# PASO 4: Verificar que no quedan LBs (debe estar vacío)
+aws elbv2 describe-load-balancers --region us-east-1 --query 'LoadBalancers[].DNSName'
+
+# PASO 5: Ahora sí, destruir la infraestructura
 cd etapa-01-cluster-eks/terraform/
 terraform destroy -auto-approve
 ```
 
-⏱️ Tiempo de destrucción: ~10 minutos.
+⏱️ Tiempo total de destrucción: ~12 minutos.
+
+**¿Y si terraform destroy falla de todas formas?**
+
+```bash
+# Opción A: Esperar más y reintentar
+sleep 60
+terraform destroy -auto-approve
+
+# Opción B: Eliminar el LB manualmente desde la consola AWS
+# EC2 → Load Balancers → seleccionar → Actions → Delete
+# Luego reintentar terraform destroy
+
+# Opción C: Forzar eliminación de la VPC (último recurso)
+# VPC → seleccionar la VPC → Actions → Delete VPC
+# (esto elimina subnets, routes, etc. en cascada)
+# Luego: terraform destroy (solo quedan IAM roles y el cluster)
+```
+
+**O usa el script que ya tiene todo esto automatizado:**
+```bash
+chmod +x scripts/destroy-all.sh
+./scripts/destroy-all.sh
+```
 
 **Verificar que no queda nada:**
 ```bash
