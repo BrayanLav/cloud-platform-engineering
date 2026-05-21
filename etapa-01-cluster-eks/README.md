@@ -474,9 +474,24 @@ Así no tienes que recordar el comando. Terraform te lo da listo para copiar y p
 
 ### `backend.tf` — Remote state (opcional pero recomendado)
 
-> **🏆 Buena práctica: Remote state en S3 + DynamoDB.**
+> **🏆 Buena práctica: Remote state en S3 con locking nativo.**
 >
 > Por defecto, Terraform guarda el state en un archivo local (`terraform.tfstate`).
+>
+> Desde **Terraform 1.10 (noviembre 2024)**, S3 soporta locking nativo
+> con `use_lockfile = true`. Ya **NO necesitas DynamoDB** (está deprecated).
+>
+> ```hcl
+> terraform {
+>   backend "s3" {
+>     bucket       = "mi-bucket-tfstate"
+>     key          = "eks/terraform.tfstate"
+>     region       = "us-east-1"
+>     encrypt      = true
+>     use_lockfile = true   # ← Locking nativo de S3 (sin DynamoDB)
+>   }
+> }
+> ```
 > Problemas:
 > - Si borras tu laptop, pierdes el state y Terraform no sabe qué creó
 > - Si trabajas en equipo, dos personas pueden aplicar al tiempo y corromperlo

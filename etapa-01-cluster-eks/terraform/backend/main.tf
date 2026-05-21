@@ -1,8 +1,8 @@
 ###############################################################################
-# Crear el bucket S3 y tabla DynamoDB para remote state
+# Crear el bucket S3 para remote state (con locking nativo)
 ###############################################################################
-# Este es un mini-Terraform que crea la infraestructura para guardar el state.
-# Se ejecuta UNA SOLA VEZ antes de todo lo demás.
+# Desde Terraform 1.10+ (nov 2024), S3 soporta locking NATIVO.
+# Ya NO necesitas DynamoDB. Solo S3 con use_lockfile = true.
 #
 # Uso:
 #   cd backend/
@@ -70,24 +70,16 @@ resource "aws_s3_bucket_public_access_block" "tfstate" {
 }
 
 # ============================================================================
-# DynamoDB Table para locking
+# YA NO NECESITAS DYNAMODB
 # ============================================================================
-# Previene que dos personas apliquen Terraform al mismo tiempo
-resource "aws_dynamodb_table" "tflock" {
-  name         = var.dynamodb_table_name
-  billing_mode = "PAY_PER_REQUEST"  # Gratis en free tier (25GB)
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  tags = {
-    Name      = "Terraform Lock"
-    ManagedBy = "terraform"
-  }
-}
+# Antes (Terraform < 1.10):
+#   Se necesitaba una tabla DynamoDB para locking.
+#   Esto está DEPRECATED y será removido en futuras versiones.
+#
+# Ahora (Terraform >= 1.10):
+#   S3 tiene locking nativo con use_lockfile = true.
+#   Crea un archivo .tflock junto al state. Más simple, menos infra.
+# ============================================================================
 
 # ============================================================================
 # Variables
@@ -98,21 +90,11 @@ variable "bucket_name" {
   default     = "platform-cluster-tfstate"
 }
 
-variable "dynamodb_table_name" {
-  description = "Nombre de la tabla DynamoDB para locking"
-  type        = string
-  default     = "platform-cluster-tflock"
-}
-
 # ============================================================================
 # Outputs
 # ============================================================================
 output "bucket_name" {
   value = aws_s3_bucket.tfstate.id
-}
-
-output "dynamodb_table_name" {
-  value = aws_dynamodb_table.tflock.name
 }
 
 output "next_step" {
