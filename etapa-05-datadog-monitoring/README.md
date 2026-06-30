@@ -116,6 +116,7 @@ helm repo update
 # Instalar el Operator
 helm install datadog-operator datadog/datadog-operator \
   --namespace datadog \
+  --version 2.5.0 \
   --values helm/values-operator.yaml
 
 # Verificar
@@ -263,16 +264,6 @@ cd ../../
 # Usar el script de destrucción
 chmod +x scripts/destroy-all.sh
 ./scripts/destroy-all.sh
-
-# O manual:
-helm uninstall ingress-nginx -n ingress-nginx 2>/dev/null
-helm uninstall cert-manager -n cert-manager 2>/dev/null
-helm uninstall monitoring -n monitoring 2>/dev/null
-helm uninstall argocd -n argocd 2>/dev/null
-helm uninstall datadog-operator -n datadog 2>/dev/null
-sleep 30
-cd etapa-01-cluster-eks/terraform/
-terraform destroy -auto-approve
 ```
 
 Verificar:

@@ -28,6 +28,12 @@ spec:
         app.kubernetes.io/component: web
         app.kubernetes.io/part-of: cloud-platform
     spec:
+      # BUENA PRÁCTICA: Security context restrictivo
+      securityContext:
+        runAsNonRoot: false  # http-echo necesita root; en apps reales usar true
+      # BUENA PRÁCTICA: No montar el service account token si no lo necesitas
+      # Si un atacante entra al pod, no puede hablar con el API de Kubernetes
+      automountServiceAccountToken: false
       containers:
         - name: hello
           image: hashicorp/http-echo:0.2.3
@@ -37,6 +43,10 @@ spec:
             - containerPort: 5678
               name: http
               protocol: TCP
+          # BUENA PRÁCTICA: Security context por container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           resources:
             requests:
               cpu: 50m

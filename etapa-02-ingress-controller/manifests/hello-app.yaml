@@ -33,6 +33,8 @@ spec:
       # BUENA PRÁCTICA: No correr como root
       securityContext:
         runAsNonRoot: false  # http-echo necesita root, en apps reales usar true
+      # BUENA PRÁCTICA: No montar el service account token si no lo necesitas
+      automountServiceAccountToken: false
       containers:
         - name: hello
           image: hashicorp/http-echo:0.2.3
@@ -42,6 +44,10 @@ spec:
             - containerPort: 5678
               name: http
               protocol: TCP
+          # BUENA PRÁCTICA: Security context restrictivo por container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           # BUENA PRÁCTICA: Siempre definir resources
           resources:
             requests:

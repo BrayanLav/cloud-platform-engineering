@@ -67,13 +67,18 @@ Abre `helm/values-prometheus.yaml`. Puntos clave:
 
 ```yaml
 grafana:
-  adminPassword: "DevOps2024!"  # ← CAMBIAR en producción
+  adminPassword: ""   # ← Se configura como secret de Kubernetes (más seguro)
 
   grafana.ini:
     server:
       root_url: "%(protocol)s://%(domain)s/grafana"
       serve_from_sub_path: true  # Para que funcione en /grafana (no en /)
 ```
+
+> **🏆 Buena práctica: NO poner passwords en archivos que van a Git.**
+>
+> La contraseña se configura como un Kubernetes Secret (paso 3 abajo).
+> Así puedes pushear tu values.yaml a Git sin exponer credenciales.
 
 > **🏆 Buena práctica: Configurar subpath cuando usas Ingress compartido.**
 >
@@ -102,10 +107,20 @@ helm repo update
 # Crear namespace
 kubectl create namespace monitoring
 
+# Crear el secret con la contraseña de Grafana (NO va en el values.yaml)
+kubectl create secret generic grafana-admin-credentials \
+  --namespace monitoring \
+  --from-literal=admin-user=admin \
+  --from-literal=admin-password=TuPasswordSeguro123!
+
 # Instalar (un solo comando instala Prometheus + Grafana + Alertmanager + todo)
 helm install monitoring prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
-  --values helm/values-prometheus.yaml
+  --version 68.4.0 \
+  --values helm/values-prometheus.yaml \
+  --set grafana.admin.existingSecret=grafana-admin-credentials \
+  --set grafana.admin.userKey=admin-user \
+  --set grafana.admin.passwordKey=admin-password
 ```
 
 Esperar ~3-5 minutos (Fargate cold start para varios pods):
@@ -160,7 +175,7 @@ http://<TU_LB_URL>/grafana
 
 Credenciales:
 - **Usuario:** admin
-- **Password:** DevOps2024!
+- **Password:** (el que pusiste en el secret del paso 3)
 
 Si funciona, verás el dashboard de bienvenida de Grafana.
 

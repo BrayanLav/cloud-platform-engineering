@@ -110,11 +110,22 @@ helm repo update
 # Crear namespace
 kubectl create namespace ingress-nginx
 
-# Instalar
+# Instalar (IMPORTANTE: versión >= 4.12.0 para parche de CVE-2025-1974)
 helm install ingress-nginx ingress-nginx/ingress-nginx \
   --namespace ingress-nginx \
+  --version 4.12.0 \
   --values helm/values-ingress-nginx.yaml
 ```
+
+> **⚠️ SEGURIDAD: Siempre pinnear la versión del chart de Helm.**
+>
+> En marzo 2025 se descubrió "IngressNightmare" (CVE-2025-1974, CVSS 9.8):
+> una cadena de vulnerabilidades que permite ejecución remota de código
+> SIN autenticación en el controller. Afecta todas las versiones antes de
+> v1.12.1 (chart < 4.12.0). Cualquier pod en el cluster (o atacante con
+> acceso al cluster network) podía tomar control total del cluster.
+>
+> **Siempre verifica la versión:** `helm list -n ingress-nginx`
 
 Esperar ~2-3 minutos:
 ```bash
@@ -237,7 +248,7 @@ kubectl get pods -n apps -w
 
 El Ingress le dice a NGINX: "cuando llegue tráfico a `/`, mándalo al servicio `hello-app`".
 
-Mira `manifests/hello-ingress.yaml`:
+Mira el archivo `manifests/hello-ingress.yaml`:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -245,9 +256,8 @@ kind: Ingress
 metadata:
   name: hello-app
   namespace: apps
-  annotations:
-    kubernetes.io/ingress.class: nginx  # Usar NGINX como controller
 spec:
+  ingressClassName: nginx    # Usar NGINX como controller (campo estándar)
   rules:
     - http:  # Sin "host" = acepta cualquier dominio (perfecto para DNS de AWS)
         paths:
@@ -259,6 +269,12 @@ spec:
                 port:
                   number: 80
 ```
+
+> **🏆 Buena práctica: Usar `ingressClassName` en vez de la anotación.**
+>
+> La anotación `kubernetes.io/ingress.class: nginx` está deprecated desde
+> Kubernetes 1.22. El campo `spec.ingressClassName` es el estándar actual.
+> Funciona igual pero es la forma correcta y futura.
 
 Aplicar:
 ```bash
@@ -284,7 +300,37 @@ Hola desde EKS! La plataforma funciona. 🚀
 
 ---
 
-## Paso 9: Instalar cert-manager (para HTTPS)
+## Paso 9: Aplicar NetworkPolicies (seguridad de red)
+
+Por defecto, cualquier pod puede hablar con cualquier otro pod en el cluster.
+Eso es peligroso: si un atacante compromete tu app, puede moverse lateralmente
+a Prometheus, ArgoCD o cualquier otro servicio.
+
+```bash
+kubectl apply -f manifests/network-policy-apps.yaml
+```
+
+> **🏆 Buena práctica: NetworkPolicies en CADA namespace.**
+>
+> Kubernetes no tiene aislamiento de red por defecto. Las NetworkPolicies
+> son como firewalls entre namespaces. La regla de oro es:
+> 1. Bloquear TODO el tráfico entrante (default-deny)
+> 2. Permitir solo lo que necesitas explícitamente
+>
+> En este caso, los pods de "apps" solo aceptan tráfico del Ingress Controller
+> y solo pueden salir a internet y hablar con DNS. Nada más.
+
+Verificar que la policy está activa:
+```bash
+kubectl get networkpolicy -n apps
+# NAME                    POD-SELECTOR   AGE
+# default-deny-ingress   <none>         5s
+# allow-dns-egress       <none>         5s
+```
+
+---
+
+## Paso 10: Instalar cert-manager (para HTTPS)
 
 cert-manager gestiona certificados TLS automáticamente. Aunque no tengas dominio
 propio, lo instalamos porque en la etapa 3 Grafana puede usarlo.
@@ -300,6 +346,7 @@ kubectl create namespace cert-manager
 # Instalar
 helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
+  --version v1.16.0 \
   --values helm/values-cert-manager.yaml
 
 # Verificar (3 pods deben estar Running)

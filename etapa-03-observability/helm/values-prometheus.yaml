@@ -5,7 +5,7 @@
 grafana:
   enabled: true
   adminUser: admin
-  adminPassword: "DevOps2024!"
+  adminPassword: ""  # Se configura vía kubectl secret (ver README)
 
   # Para que funcione detrás del Ingress con subpath /grafana
   grafana.ini:

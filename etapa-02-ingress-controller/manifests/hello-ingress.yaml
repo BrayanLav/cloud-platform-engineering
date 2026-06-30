@@ -7,10 +7,8 @@ kind: Ingress
 metadata:
   name: hello-app
   namespace: apps
-  annotations:
-    # Usar NGINX como ingress controller
-    kubernetes.io/ingress.class: nginx
 spec:
+  ingressClassName: nginx
   rules:
     # Sin host = acepta cualquier request (perfecto para DNS de AWS)
     - http:
