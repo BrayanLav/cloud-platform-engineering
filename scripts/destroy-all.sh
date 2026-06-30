@@ -1,81 +1,76 @@
 #!/bin/bash
 ###############################################################################
-# 🔴 DESTRUIR TODA LA INFRAESTRUCTURA 🔴
-# Ejecuta esto cuando termines TODAS las etapas
+# Script: Destruir toda la infraestructura del lab
+###############################################################################
+# Este script elimina todo en el orden correcto para evitar errores de
+# dependencia. SIEMPRE úsalo en vez de terraform destroy directo.
+#
+# Uso:
+#   chmod +x scripts/destroy-all.sh
+#   ./scripts/destroy-all.sh
 ###############################################################################
 
 set -e
 
-echo "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
-echo "🔴  DESTRUYENDO TODA LA INFRAESTRUCTURA       🔴"
-echo "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
-echo ""
-echo "Esto elimina:"
-echo "  - Cluster EKS"
-echo "  - VPC, Subnets, NAT Gateway"
-echo "  - Load Balancers"
-echo "  - Fargate Profiles"
-echo "  - IAM Roles"
-echo "  - TODO"
-echo ""
-read -p "⚠️  Escribe 'destroy' para confirmar: " confirm
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-if [[ "$confirm" != "destroy" ]]; then
-    echo "❌ Cancelado"
-    exit 0
+echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${RED}║  ⚠️  DESTRUYENDO TODA LA INFRAESTRUCTURA DEL LAB           ║${NC}"
+echo -e "${RED}║  Esto elimina: EKS, VPC, Load Balancers, todo.             ║${NC}"
+echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+read -p "¿Estás seguro? Escribe 'destruir' para confirmar: " confirm
+if [ "$confirm" != "destruir" ]; then
+  echo -e "${YELLOW}Cancelado.${NC}"
+  exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="$SCRIPT_DIR/../etapa-01-cluster-eks/terraform"
-
-# ============================================================================
-# PASO CRÍTICO: Eliminar recursos de Kubernetes ANTES de Terraform
-# ============================================================================
-# ¿Por qué? Kubernetes crea Load Balancers (NLB/ALB) que viven en la VPC
-# pero Terraform no sabe que existen (no los creó él). Si intentas hacer
-# terraform destroy sin eliminarlos primero, falla porque la VPC tiene
-# recursos "huérfanos" que Terraform no puede borrar.
-# ============================================================================
+echo ""
+echo -e "${YELLOW}Paso 1/5: Eliminando Helm releases...${NC}"
+helm uninstall datadog-operator -n datadog 2>/dev/null || echo "  → datadog-operator no encontrado (OK)"
+helm uninstall argocd -n argocd 2>/dev/null || echo "  → argocd no encontrado (OK)"
+helm uninstall monitoring -n monitoring 2>/dev/null || echo "  → monitoring no encontrado (OK)"
+helm uninstall cert-manager -n cert-manager 2>/dev/null || echo "  → cert-manager no encontrado (OK)"
+helm uninstall ingress-nginx -n ingress-nginx 2>/dev/null || echo "  → ingress-nginx no encontrado (OK)"
 
 echo ""
-echo "🧹 [1/4] Eliminando Services tipo LoadBalancer..."
-# Esto le dice a Kubernetes que borre los Services, lo cual trigger
-# la eliminación automática de los NLB/ALB en AWS
-kubectl delete svc --all-namespaces -l app.kubernetes.io/name=ingress-nginx 2>/dev/null || true
-kubectl delete svc ingress-nginx-controller -n ingress-nginx 2>/dev/null || true
-
-echo "🧹 [2/4] Eliminando Ingress resources (pueden tener ALBs asociados)..."
+echo -e "${YELLOW}Paso 2/5: Eliminando recursos de Kubernetes...${NC}"
 kubectl delete ingress --all-namespaces --all 2>/dev/null || true
+kubectl delete svc -n ingress-nginx ingress-nginx-controller 2>/dev/null || true
+kubectl delete -f etapa-04-gitops-argocd/apps/ 2>/dev/null || true
+kubectl delete -f etapa-05-datadog-monitoring/manifests/ 2>/dev/null || true
 
-echo "🧹 [3/4] Eliminando Helm releases..."
-helm uninstall ingress-nginx -n ingress-nginx 2>/dev/null || true
-helm uninstall cert-manager -n cert-manager 2>/dev/null || true
-helm uninstall monitoring -n monitoring 2>/dev/null || true
-helm uninstall argocd -n argocd 2>/dev/null || true
-helm uninstall datadog-operator -n datadog 2>/dev/null || true
+echo ""
+echo -e "${YELLOW}Paso 3/5: Esperando que AWS elimine los Load Balancers (90 seg)...${NC}"
+echo "  Los Load Balancers tardan ~60 seg en eliminarse de AWS."
+echo "  Si no esperas, terraform destroy falla con DependencyViolation."
+sleep 90
 
-# Esperar a que AWS elimine los Load Balancers (tarda ~30-60 seg)
-echo "⏳ [4/4] Esperando que AWS elimine los Load Balancers (60s)..."
-echo "   (Si no esperas, terraform destroy falla porque la VPC tiene LBs huérfanos)"
-sleep 60
+echo ""
+echo -e "${YELLOW}Paso 4/5: Verificando que no quedan Load Balancers...${NC}"
+LB_COUNT=$(aws elbv2 describe-load-balancers --region us-east-1 \
+  --query 'length(LoadBalancers)' --output text 2>/dev/null || echo "0")
 
-# Verificar que no quedan LBs
-echo "🔍 Verificando que no quedan Load Balancers..."
-LB_COUNT=$(aws elbv2 describe-load-balancers --region us-east-1 --query 'LoadBalancers[?VpcId==`'$(cd "$TERRAFORM_DIR" && terraform output -raw vpc_id 2>/dev/null)'`]' --output text 2>/dev/null | wc -l)
-if [ "$LB_COUNT" -gt "1" ]; then
-    echo "⚠️  Todavía hay Load Balancers en la VPC. Esperando 30s más..."
-    sleep 30
+if [ "$LB_COUNT" != "0" ]; then
+  echo -e "${YELLOW}  ⚠️  Todavía hay $LB_COUNT Load Balancer(s). Esperando 60 seg más...${NC}"
+  sleep 60
 fi
 
-# Terraform destroy
 echo ""
-echo "💣 Ejecutando terraform destroy..."
-cd "$TERRAFORM_DIR"
+echo -e "${YELLOW}Paso 5/5: Destruyendo infraestructura con Terraform...${NC}"
+cd etapa-01-cluster-eks/terraform/
 terraform destroy -auto-approve
 
 echo ""
-echo "✅ ¡Todo destruido! Ya no se generan costos."
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║  ✅ Todo destruido. Verificando...                          ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo "Verifica en la consola:"
-echo "  aws eks list-clusters --region us-east-1"
-echo "  aws ec2 describe-nat-gateways --region us-east-1 --filter Name=state,Values=available"
+
+aws eks list-clusters --region us-east-1 --query 'clusters' --output text
+echo ""
+echo -e "${GREEN}Si no aparece nada arriba, tu cuenta está limpia. $0/hr.${NC}"

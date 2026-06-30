@@ -1,6 +1,10 @@
 ###############################################################################
 # NGINX Ingress Controller - EKS con Fargate
 ###############################################################################
+# IMPORTANTE: Usar chart versión >= 4.12.0 (controller >= v1.12.1)
+# Versiones anteriores tienen vulnerabilidad CRÍTICA CVE-2025-1974
+# (IngressNightmare - RCE sin autenticación, CVSS 9.8)
+###############################################################################
 
 controller:
   resources:
@@ -35,6 +39,10 @@ controller:
 
   admissionWebhooks:
     enabled: true
+    # NOTA: El admission webhook fue parte del vector de ataque de
+    # IngressNightmare (CVE-2025-1974). Con el chart >= 4.12.0 está parcheado.
+    # Si quieres extra seguridad, puedes deshabilitarlo (pero pierdes
+    # validación de Ingress resources antes de aplicarlas).
 
 defaultBackend:
   enabled: true

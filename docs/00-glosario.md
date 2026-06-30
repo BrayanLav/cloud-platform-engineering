@@ -64,3 +64,44 @@ kubectl port-forward svc/<svc> 8080:80 -n <ns>  # Túnel a tu laptop
 kubectl delete pod <nombre> -n <ns>      # Eliminar pod
 kubectl get events -n <ns> --sort-by='.lastTimestamp'  # Eventos recientes
 ```
+
+## Seguridad en Kubernetes
+
+| Término | Qué es | Por qué importa |
+|---------|--------|-----------------|
+| **NetworkPolicy** | Firewall entre pods/namespaces | Sin ella, cualquier pod puede hablar con cualquier otro |
+| **securityContext** | Restricciones de seguridad para un pod/container | Evita que un container comprometido haga daño |
+| **runAsNonRoot** | No correr el proceso como usuario root | Si explotan tu app, el atacante no tiene permisos de admin |
+| **readOnlyRootFilesystem** | El container no puede escribir en su propio disco | Evita que un atacante instale malware dentro del container |
+| **allowPrivilegeEscalation** | Controla si un proceso puede ganar más privilegios | false = aunque entren, no pueden escalar a root |
+| **automountServiceAccountToken** | Monta un token para hablar con el API de Kubernetes | false = un pod comprometido no puede controlar el cluster |
+| **RBAC** | Role-Based Access Control: quién puede hacer qué en el cluster | Principio de least privilege dentro de Kubernetes |
+| **Secret** | Dato sensible encriptado en Kubernetes | Passwords, tokens, API keys. NUNCA en código |
+| **ServiceAccount** | Identidad para un pod dentro del cluster | Cada pod tiene una; define qué permisos tiene |
+
+## Vulnerabilidades famosas (para entender el contexto)
+
+| CVE | Nombre | Qué pasó | Lección |
+|-----|--------|----------|---------|
+| CVE-2025-1974 | IngressNightmare | RCE sin autenticación en ingress-nginx | SIEMPRE pinnear versiones de charts |
+| CVE-2026-11417 | CDK Command Injection | Inyección de comandos en NodejsFunction bundling | Mantener CDK actualizado (>= 2.245.0) |
+| - | Supply chain (npm) | Paquetes maliciosos en npm roban credenciales | Usar pnpm + lockfiles + auditoría |
+
+## Comandos de seguridad útiles
+
+```bash
+# Ver si hay NetworkPolicies en un namespace
+kubectl get networkpolicy -n <namespace>
+
+# Ver el security context de un pod
+kubectl get pod <nombre> -n <ns> -o jsonpath='{.spec.containers[*].securityContext}'
+
+# Ver si un pod tiene el service account token montado
+kubectl exec <pod> -n <ns> -- ls /var/run/secrets/kubernetes.io/serviceaccount/ 2>/dev/null
+
+# Auditar quién tiene acceso al cluster
+kubectl auth can-i --list
+
+# Ver secrets (sin mostrar el contenido)
+kubectl get secrets -A
+```

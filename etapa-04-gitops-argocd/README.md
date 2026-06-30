@@ -94,6 +94,7 @@ kubectl create namespace argocd
 # Instalar
 helm install argocd argo/argo-cd \
   --namespace argocd \
+  --version 7.7.0 \
   --values helm/values-argocd.yaml
 
 # Esperar ~2-3 min

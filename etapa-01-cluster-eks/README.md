@@ -26,18 +26,20 @@ destruir un día entero, ~$3.72 USD.
 
 ## Paso 1: Verificar herramientas
 
-Necesitas 3 herramientas instaladas. Abre tu terminal y verifica:
+Necesitas 4 herramientas instaladas. Abre tu terminal y verifica:
 
 ```bash
 aws --version        # Necesitas v2.x
-terraform --version  # Necesitas >= 1.5
+terraform --version  # Necesitas >= 1.10 (para locking nativo de S3)
 kubectl version --client  # Cualquier versión reciente
+helm version         # Necesitas v3.x (se usa desde etapa 2)
 ```
 
 Si alguna falta, instálala:
 - **AWS CLI**: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
 - **Terraform**: https://developer.hashicorp.com/terraform/install
 - **kubectl**: https://kubernetes.io/docs/tasks/tools/
+- **Helm**: https://helm.sh/docs/intro/install/
 
 ---
 
@@ -168,11 +170,11 @@ pieza es necesaria. Lee esta sección completa antes de hacer `terraform apply`.
 
 ```hcl
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.10.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.40"    # ← Acepta 5.40, 5.41, etc. pero NO 6.0
+      version = "~> 5.80"    # ← Acepta 5.80, 5.81, etc. pero NO 6.0
     }
   }
 }
@@ -232,7 +234,7 @@ DESDE internet. Es como un proxy de salida.
 ```hcl
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.5"
+  version = "~> 5.16"
 
   name = "${var.cluster_name}-vpc"
   cidr = var.vpc_cidr                    # 10.0.0.0/16 = 65,536 IPs disponibles
@@ -291,14 +293,33 @@ se queda en `Pending` para siempre (Kubernetes no sabe dónde ponerlo).
 ```hcl
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.8"
+  version = "~> 20.31"
 
   cluster_name    = var.cluster_name      # "platform-cluster"
-  cluster_version = var.cluster_version   # "1.29"
+  cluster_version = var.cluster_version   # "1.31"
 
   # Endpoint público = puedes usar kubectl desde tu laptop via internet
   # En producción pondrías esto en false y usarías VPN
   cluster_endpoint_public_access = true
+
+  # Restringir quién puede acceder al API server (BUENA PRÁCTICA)
+  cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]  # ← CAMBIAR por tu IP/32
+```
+
+> **⚠️ SEGURIDAD: Restringir el acceso al API server.**
+>
+> Por defecto, el endpoint del API server es accesible desde CUALQUIER IP
+> del mundo. Aunque requiere autenticación IAM, es mejor restringirlo a
+> tu IP pública como defensa en profundidad. Si tus credenciales se filtran,
+> un atacante desde otra IP no puede usarlas.
+>
+> Para obtener tu IP pública:
+> ```bash
+> curl -s ifconfig.me
+> # Ejemplo resultado: 203.0.113.42
+> ```
+> Luego cambia `"0.0.0.0/0"` por `"203.0.113.42/32"` en `eks.tf`.
+> El `/32` significa "solo esa IP exacta".
 
   # Add-ons: componentes esenciales que EKS necesita para funcionar
   cluster_addons = {
@@ -496,8 +517,8 @@ Así no tienes que recordar el comando. Terraform te lo da listo para copiar y p
 > - Si borras tu laptop, pierdes el state y Terraform no sabe qué creó
 > - Si trabajas en equipo, dos personas pueden aplicar al tiempo y corromperlo
 >
-> Solución: Guardar el state en S3 (encriptado, versionado) con DynamoDB
-> para locking (solo una persona aplica a la vez).
+> Solución: Guardar el state en S3 (encriptado, versionado) con locking nativo
+> (solo una persona aplica a la vez).
 >
 > **Para este lab es OPCIONAL.** Si estás solo, el state local funciona bien.
 > Pero si quieres practicar (recomendado), sigue las instrucciones en `backend.tf`.
@@ -636,8 +657,8 @@ kubectl get nodes
 Deberías ver nodos Fargate:
 ```
 NAME                                      STATUS   ROLES    AGE   VERSION
-fargate-ip-10-0-1-xxx.ec2.internal        Ready    <none>   5m    v1.29.x
-fargate-ip-10-0-2-xxx.ec2.internal        Ready    <none>   5m    v1.29.x
+fargate-ip-10-0-1-xxx.ec2.internal        Ready    <none>   5m    v1.31.x
+fargate-ip-10-0-2-xxx.ec2.internal        Ready    <none>   5m    v1.31.x
 ```
 
 ---
@@ -683,7 +704,7 @@ kubectl delete pod test-nginx -n apps
 Si quieres practicar remote state (recomendado para aprender):
 
 ```bash
-# 1. Crear el bucket S3 y tabla DynamoDB
+# 1. Crear el bucket S3 para el state
 cd backend/
 terraform init
 terraform apply
@@ -706,7 +727,7 @@ Ahora tu state está seguro en S3, encriptado y con locking.
 
 Si llegaste hasta aquí, tienes:
 - ✅ VPC con subnets públicas y privadas en 3 AZs
-- ✅ Cluster EKS corriendo Kubernetes 1.29
+- ✅ Cluster EKS corriendo Kubernetes 1.31
 - ✅ Fargate profiles para todos los namespaces que necesitarás
 - ✅ kubectl conectado y funcionando
 - ✅ (Opcional) Remote state en S3
@@ -772,8 +793,9 @@ terraform destroy -auto-approve
 # Luego: terraform destroy (solo quedan IAM roles y el cluster)
 ```
 
-**O usa el script que ya tiene todo esto automatizado:**
+**O usa el script que tiene todo esto automatizado:**
 ```bash
+cd ../../   # Volver a la raíz del proyecto (cloud-platform-engineering/)
 chmod +x scripts/destroy-all.sh
 ./scripts/destroy-all.sh
 ```

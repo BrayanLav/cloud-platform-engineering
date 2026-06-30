@@ -61,9 +61,9 @@ cd cloud-platform-engineering
 | Herramienta | Versión mínima | Para qué |
 |-------------|---------------|----------|
 | AWS CLI | v2.x | Hablar con AWS |
-| Terraform | >= 1.5 | Crear infraestructura (etapa 1) |
-| kubectl | >= 1.28 | Hablar con Kubernetes |
-| Helm | >= 3.12 | Instalar paquetes en Kubernetes (etapas 2-5) |
+| Terraform | >= 1.10 | Crear infraestructura (etapa 1) |
+| kubectl | >= 1.30 | Hablar con Kubernetes |
+| Helm | >= 3.14 | Instalar paquetes en Kubernetes (etapas 2-5) |
 
 ```bash
 # Verificar que tienes todo
@@ -79,36 +79,30 @@ helm version --short
 cloud-platform-engineering/
 ├── etapa-01-cluster-eks/           # Terraform: VPC + EKS + Fargate
 │   ├── terraform/
-│   ├── docs/
-│   ├── scripts/
 │   └── README.md
 ├── etapa-02-ingress-controller/    # Helm: NGINX Ingress + cert-manager
 │   ├── helm/
 │   ├── manifests/
-│   ├── docs/
 │   └── README.md
 ├── etapa-03-observability/         # Helm: Prometheus + Grafana
 │   ├── helm/
-│   ├── dashboards/
-│   ├── docs/
+│   ├── manifests/
 │   └── README.md
 ├── etapa-04-gitops-argocd/         # Helm: ArgoCD + GitOps
 │   ├── helm/
 │   ├── apps/
 │   ├── manifests/
-│   ├── docs/
 │   └── README.md
 ├── etapa-05-datadog-monitoring/    # Helm: Datadog Operator
 │   ├── helm/
 │   ├── manifests/
-│   ├── docs/
 │   └── README.md
+├── modules/                        # Módulos reutilizables de Terraform
+│   ├── fargate-profile/
+│   └── helm-release/
 ├── docs/                           # Documentación general
-│   ├── 00-glosario.md
-│   ├── costos.md
-│   └── como-acceder-servicios.md
+│   └── 00-glosario.md
 ├── scripts/
-│   ├── setup-tools.sh             # Instalar herramientas
 │   └── destroy-all.sh             # Destruir TODO
 ├── .gitignore
 └── README.md
@@ -129,11 +123,11 @@ cloud-platform-engineering/
 
 ## ✅ Buenas Prácticas Aplicadas
 
-Este proyecto aplica buenas prácticas reales de la industria. Ver [docs/buenas-practicas.md](./docs/buenas-practicas.md) para el detalle completo.
+Este proyecto aplica buenas prácticas reales de la industria en cada etapa (busca los 🏆 en los READMEs):
 
 | Área | Práctica | Por qué |
 |------|----------|---------|
-| Terraform | Remote state en S3 + DynamoDB | State seguro, versionado, con locking |
+| Terraform | Remote state en S3 con locking nativo | State seguro, versionado, con locking (sin DynamoDB) |
 | Terraform | Validación de variables | Fallar rápido con mensajes claros |
 | Terraform | Módulos con versión pinneada | Reproducibilidad |
 | Terraform | Tags en todos los recursos | Trazabilidad y control de costos |
@@ -141,6 +135,19 @@ Este proyecto aplica buenas prácticas reales de la industria. Ver [docs/buenas-
 | Kubernetes | Resource requests + limits | Obligatorio en Fargate, buena práctica siempre |
 | Kubernetes | Liveness + readiness probes | Auto-healing y zero-downtime |
 | Kubernetes | Réplicas >= 2 | Alta disponibilidad |
+| Kubernetes | NetworkPolicies | Aislamiento de red entre namespaces |
 | Seguridad | Secrets fuera de Git | No exponer credenciales |
 | Seguridad | Encriptación del state | Proteger info sensible |
 | Seguridad | Least privilege IAM | Minimizar blast radius |
+| Seguridad | securityContext restrictivo | allowPrivilegeEscalation:false, readOnlyRootFilesystem |
+| Seguridad | Versiones de charts pinneadas | Evitar vulnerabilidades conocidas (IngressNightmare) |
+| Seguridad | CIDR restriction en EKS endpoint | Limitar quién puede acceder al API server |
+
+## ⚠️ Vulnerabilidades conocidas que este proyecto mitiga
+
+| CVE | Severidad | Qué es | Cómo se mitiga aquí |
+|-----|-----------|--------|---------------------|
+| CVE-2025-1974 (IngressNightmare) | CRÍTICA (9.8) | RCE sin auth en ingress-nginx < v1.12.1 | Chart pinneado >= 4.12.0 |
+| CVE-2026-11417 | ALTA | Command injection en CDK NodejsFunction | CDK >= 2.245.0 |
+| EKS endpoint público | MEDIA | API server accesible desde internet | CIDR restriction configurada |
+| Sin NetworkPolicies | MEDIA | Movimiento lateral entre pods | NetworkPolicy en namespace apps |

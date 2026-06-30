@@ -4,12 +4,17 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.8"
+  version = "~> 20.31"
 
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
 
   cluster_endpoint_public_access = true
+
+  # Restringir acceso público al API server solo a TU IP
+  # Esto evita que cualquier persona en internet pueda intentar autenticarse
+  # Cambia "0.0.0.0/0" por tu IP pública: curl -s ifconfig.me
+  cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]  # ← CAMBIAR por tu IP/32
 
   # Add-ons del cluster
   cluster_addons = {

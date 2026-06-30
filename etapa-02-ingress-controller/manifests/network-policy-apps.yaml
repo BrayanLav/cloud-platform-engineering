@@ -1,0 +1,64 @@
+###############################################################################
+# NetworkPolicy: Restringir tráfico al namespace apps
+###############################################################################
+# POR QUÉ ESTO ES IMPORTANTE:
+#
+# Sin NetworkPolicies, cualquier pod en tu cluster puede hablar con cualquier
+# otro pod. Si un atacante compromete un pod en el namespace "apps", puede:
+# - Acceder a Prometheus y ver métricas sensibles
+# - Conectarse a ArgoCD y desplegar código malicioso
+# - Hablar con el ingress controller y robar secrets TLS
+#
+# Con esta NetworkPolicy, los pods en "apps" SOLO pueden:
+# - Recibir tráfico del Ingress Controller (para que funcione el routing)
+# - Salir a internet (para llamar APIs externas)
+# - Hablar entre ellos dentro del namespace
+# - Hablar con CoreDNS (para resolver nombres)
+#
+# Todo lo demás queda BLOQUEADO.
+###############################################################################
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: apps
+spec:
+  podSelector: {}  # Aplica a TODOS los pods del namespace
+  policyTypes:
+    - Ingress
+  ingress:
+    # Solo permitir tráfico desde el namespace ingress-nginx
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: apps
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Permitir DNS (CoreDNS en kube-system)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Permitir salida a internet (APIs externas, registros, etc.)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/16  # Bloquear acceso a la VPC interna
+    # Permitir comunicación intra-namespace (pods de apps entre sí)
+    - to:
+        - podSelector: {}
