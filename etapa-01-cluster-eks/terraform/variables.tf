@@ -33,11 +33,11 @@ variable "cluster_name" {
 variable "cluster_version" {
   description = "Versión de Kubernetes para EKS"
   type        = string
-  default     = "1.31"
+  default     = "1.34"
 
   validation {
-    condition     = contains(["1.30", "1.31", "1.32"], var.cluster_version)
-    error_message = "Versión debe ser una soportada por EKS: 1.30, 1.31, 1.32."
+    condition     = contains(["1.32", "1.33", "1.34", "1.35", "1.36"], var.cluster_version)
+    error_message = "Versión debe ser una soportada por EKS en standard support: 1.32, 1.33, 1.34, 1.35, 1.36."
   }
 }
 

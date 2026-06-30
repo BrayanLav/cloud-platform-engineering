@@ -296,7 +296,7 @@ module "eks" {
   version = "~> 20.31"
 
   cluster_name    = var.cluster_name      # "platform-cluster"
-  cluster_version = var.cluster_version   # "1.31"
+  cluster_version = var.cluster_version   # "1.34"
 
   # Endpoint público = puedes usar kubectl desde tu laptop via internet
   # En producción pondrías esto en false y usarías VPN
@@ -657,8 +657,8 @@ kubectl get nodes
 Deberías ver nodos Fargate:
 ```
 NAME                                      STATUS   ROLES    AGE   VERSION
-fargate-ip-10-0-1-xxx.ec2.internal        Ready    <none>   5m    v1.31.x
-fargate-ip-10-0-2-xxx.ec2.internal        Ready    <none>   5m    v1.31.x
+fargate-ip-10-0-1-xxx.ec2.internal        Ready    <none>   5m    v1.34.x
+fargate-ip-10-0-2-xxx.ec2.internal        Ready    <none>   5m    v1.34.x
 ```
 
 ---
@@ -727,7 +727,7 @@ Ahora tu state está seguro en S3, encriptado y con locking.
 
 Si llegaste hasta aquí, tienes:
 - ✅ VPC con subnets públicas y privadas en 3 AZs
-- ✅ Cluster EKS corriendo Kubernetes 1.31
+- ✅ Cluster EKS corriendo Kubernetes 1.34
 - ✅ Fargate profiles para todos los namespaces que necesitarás
 - ✅ kubectl conectado y funcionando
 - ✅ (Opcional) Remote state en S3
