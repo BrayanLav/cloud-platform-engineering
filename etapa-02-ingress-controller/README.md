@@ -1,403 +1,358 @@
-# Etapa 2: Ingress Controller + TLS
+# Etapa 2: Ingress Controller + Acceso Web 🌐
 
-## Qué vamos a hacer
+¡Hola de nuevo! Si ya terminaste la Etapa 1, tienes un clúster de Kubernetes en AWS (EKS) funcionando perfectamente. Sin embargo, en este momento tus aplicaciones están "encerradas" dentro del clúster; nadie desde internet puede acceder a ellas. 
 
-Instalar NGINX Ingress Controller para poder acceder a los servicios del cluster
-desde un navegador web. AWS te da una URL pública automáticamente (sin comprar dominio).
+En esta etapa, vamos a abrir la puerta (de forma segura) para que el tráfico externo pueda llegar a tus aplicaciones usando un **Ingress Controller** y el **AWS Load Balancer Controller**.
 
-Al terminar esta etapa vas a poder abrir un navegador, pegar una URL de AWS,
-y ver tus aplicaciones corriendo en Kubernetes.
+### 💰 Estimación de Costos (Mensual)
 
----
+| Recurso AWS | Uso estimado | Costo Aproximado |
+|-------------|--------------|------------------|
+| Network Load Balancer (NLB) | 1 balanceador (730 horas) + datos | ~$16.00 USD |
+| Pods de NGINX Ingress (Fargate) | 2 réplicas (0.25 vCPU, 0.5 GB) | ~$10.00 USD |
+| Pods de cert-manager (Fargate) | 1 réplica (0.25 vCPU, 0.5 GB) | ~$5.00 USD |
+| **Total Estimado** | | **~$31.00 USD / mes** |
 
-## Antes de empezar
-
-**Prerequisito:** Etapa 1 completada (cluster EKS corriendo).
-
-Verifica:
-```bash
-kubectl get nodes
-# Debe mostrar nodos Fargate
-```
-
-**Costo adicional de esta etapa:**
-
-| Recurso | Costo/hora |
-|---------|-----------|
-| Fargate - NGINX Ingress (2 pods) | $0.06 |
-| Fargate - cert-manager (3 pods) | $0.03 |
-| AWS NLB (Load Balancer) | $0.023 |
-| **Total adicional** | **~$0.11/hr** |
+> [!NOTE] 
+> Recuerda destruir los recursos cuando termines el laboratorio para evitar cobros inesperados. Al final de este documento encontrarás los comandos para desinstalar todo.
 
 ---
 
-## Paso 1: Entender qué es un Ingress Controller
+## 2. Conceptos previos 🧠
 
-Sin Ingress Controller, la única forma de ver algo en tu cluster es con `port-forward`
-(un túnel temporal que se cae cuando cierras el terminal).
+Antes de teclear comandos, entendamos qué vamos a instalar. No te preocupes si todo es nuevo, lo explicaremos desde cero.
 
-Con Ingress Controller:
+### ¿Qué es un Ingress Controller?
+Imagina un gran edificio de oficinas (tu clúster). Dentro hay muchas empresas (tus aplicaciones). Si un visitante (un usuario web) quiere ir a una empresa específica, no entra por cualquier ventana; entra por la puerta principal, donde hay un **recepcionista**. El visitante dice "Quiero ir a la empresa X" y el recepcionista le indica el camino exacto.
+
+Un **Ingress Controller** es ese recepcionista. Es un pod especial en K8s que recibe todo el tráfico web externo (HTTP/HTTPS) y, usando reglas definidas (objetos "Ingress"), decide a qué aplicación interna enviarlo basándose en la URL o la ruta (ej. `midominio.com/api` va a la app de backend, `midominio.com/web` va a la app de frontend).
+
+```text
+                  Internet
+                     |
+              [AWS NLB (Puerta)]
+                     |
+       +----------------------------+
+       | Ingress Controller (Pod)   | <-- "El Recepcionista"
+       | "midominio.com/api" ------>|---> [App Backend]
+       | "midominio.com/web" ------>|---> [App Frontend]
+       +----------------------------+
 ```
-Internet → AWS Load Balancer → NGINX Ingress → Tu servicio → Tu pod
-           (URL pública)       (routing)
+
+### ¿Qué es NGINX Ingress?
+Es el Ingress Controller más popular del mundo, basado en el famoso servidor web NGINX. 
+
+> [!WARNING] 
+> **Nota histórica importante:** El proyecto oficial `ingress-nginx` fue **ARCHIVADO** en marzo de 2026. Esto significa que ya no recibe nuevas características ni parches menores. Sin embargo, su última versión (el chart 4.15+ o 4.12.0+) sigue siendo súper estable, segura y se usa en miles de empresas. 
+> Para **nuevos proyectos reales**, deberías evaluar alternativas modernas como:
+> 1. AWS Load Balancer Controller con **Gateway API**
+> 2. Envoy Gateway
+> 3. NGINX Gateway Fabric
+
+Nosotros usaremos `ingress-nginx` porque la mayoría de las empresas lo siguen utilizando y es vital que sepas cómo operarlo.
+
+### ¿Qué es Helm?
+En Linux usas `apt-get` o `yum` para instalar programas. En Windows usas `winget` o `choco`. En Kubernetes, usas **Helm**. 
+Helm es el administrador de paquetes para Kubernetes. Te permite instalar aplicaciones complejas (que requieren decenas de archivos de configuración) con un solo comando. Los paquetes en Helm se llaman **Charts**.
+
+### ¿Qué es OIDC y para qué lo necesitamos? (IRSA)
+Por defecto, los Pods de Kubernetes no tienen permiso para hablar con los servicios de AWS (como crear un Balanceador de Carga). Necesitamos darles permisos.
+**OIDC** (OpenID Connect) es un estándar de identidad. En K8s, usamos una técnica llamada **IRSA** (IAM Roles for Service Accounts). Funciona como un "puente de confianza" entre tu clúster de K8s y AWS IAM.
+
+```text
+[Pod de K8s] --(1. Solicita acceso con un Token JWT)--> [AWS STS]
+                                                              |
+                                                    (2. Valida Token vía OIDC)
+                                                              |
+[AWS IAM Role] <--(3. Otorga credenciales temporales)---------+
 ```
+Con IRSA, le damos permisos a un Pod específico en lugar de a todo el clúster.
 
-AWS te da una URL tipo `a1b2c3d4.elb.us-east-1.amazonaws.com`.
-Cualquier persona con esa URL puede acceder (desde cualquier navegador o celular).
+### ¿Qué es el AWS Load Balancer Controller?
+Es un programa que corre en tu clúster y habla con la API de AWS. Su trabajo es escuchar cuando creas un Ingress o un Servicio tipo LoadBalancer en K8s, y automáticamente ir a AWS y crear un balanceador real (ALB o NLB) para ti. 
+> **¿Por qué en Fargate?** En versiones antiguas, K8s traía este código integrado ("in-tree"). Eso ya se eliminó. Ahora necesitas instalar este controlador sí o sí, especialmente en Fargate, que no soporta muchas de las características de red tradicionales.
 
-**¿Por qué NGINX y no otro?** NGINX Ingress es el más usado en la industria,
-tiene la mejor documentación y es el que vas a encontrar en ofertas laborales.
+### Tipos de Balanceadores en AWS (Tabla comparativa)
+
+| Tipo | Capa OSI | Uso Principal | ¿Lo usaremos hoy? |
+|------|----------|---------------|-------------------|
+| **ALB** (Application) | Capa 7 (HTTP/HTTPS) | Enrutamiento avanzado, reglas web, inyección de headers. | No directamente. |
+| **NLB** (Network) | Capa 4 (TCP/UDP) | Ultra rápido, millones de peticiones por segundo, IPs estáticas. | **SÍ**. Para apuntarlo a NGINX. |
+| **CLB** (Classic) | Capa 4/7 | Balanceador antiguo (Legacy). | NO (está obsoleto). |
 
 ---
 
-## Paso 2: Entender qué es Helm
+## Paso 1: Crear el Proveedor OIDC 🔑
 
-Helm es como `apt-get` o `yum` pero para Kubernetes. En vez de escribir
-50 archivos YAML a mano, instalas un "chart" (paquete) con un comando:
+Vamos a decirle a AWS IAM que confíe en nuestro clúster de Kubernetes. Abre tu terminal de **PowerShell** y ejecuta:
 
-```bash
-helm install <nombre> <chart> --values <configuración>
+```powershell
+# Asocia el proveedor OIDC de tu clúster con tu cuenta de AWS IAM.
+# Esto habilita la funcionalidad IRSA (IAM Roles for Service Accounts).
+eksctl utils associate-iam-oidc-provider --cluster platform-lab-cluster --region us-east-1 --approve
 ```
 
-Un chart contiene templates de Kubernetes (Deployments, Services, etc.)
-con valores configurables. Tú le pasas un archivo `values.yaml` con tu
-configuración específica.
-
-> **🏆 Buena práctica: Siempre usar un archivo de values propio.**
->
-> Nunca instalar un chart sin `--values`. Los defaults del chart son genéricos
-> y no están optimizados para tu caso. Siempre crea tu propio `values.yaml`
-> donde defines recursos, réplicas, configuración específica, etc.
+**¿Por qué hacemos esto?**
+Sin este comando, AWS bloquearía cualquier intento de un Pod de crear recursos en la nube. ¡Seguridad ante todo!
 
 ---
 
-## Paso 3: Revisar los values de NGINX Ingress
+## Paso 2: Instalar AWS Load Balancer Controller ⚖️
 
-Abre `helm/values-ingress-nginx.yaml` y lee los comentarios. Puntos clave:
+El controlador necesita una política de IAM que le diga exactamente qué cosas puede crear (balanceadores, reglas, target groups).
 
-```yaml
-controller:
-  replicaCount: 2  # Siempre >= 2 para alta disponibilidad
-
-  service:
-    annotations:
-      # Esto le dice a AWS: "crea un Network Load Balancer internet-facing"
-      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+**1. Descargamos la política oficial:**
+```powershell
+# Usamos Invoke-WebRequest (PowerShell) para bajar el archivo JSON con los permisos
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json" -OutFile "iam_policy.json"
 ```
 
-> **🏆 Buena práctica: Réplicas >= 2 para servicios críticos.**
->
-> Si el Ingress Controller tiene 1 sola réplica y se muere (o Fargate lo recicla),
-> TODO tu tráfico se cae hasta que se levante otro (~30-60 seg de cold start).
-> Con 2 réplicas, si una muere la otra sigue atendiendo.
+**2. Creamos la política en AWS:**
+```powershell
+# Crea la política en IAM basándose en el archivo descargado
+aws iam create-policy `
+    --policy-name AWSLoadBalancerControllerIAMPolicy `
+    --policy-document file://iam_policy.json
+```
+*(Copia el `Arn` que sale en la pantalla, lo usaremos en el siguiente comando).*
 
-> **🏆 Buena práctica: Definir resources (CPU/RAM) en cada componente.**
->
-> En Fargate es OBLIGATORIO (Fargate cobra por los resources que declaras).
-> Pero incluso en EC2 nodes es buena práctica: evita que un pod se coma
-> toda la RAM del nodo y mate a los demás.
+**3. Creamos el Service Account y el Rol de IAM:**
+```powershell
+# Crea la cuenta de servicio en el clúster Y el rol en AWS al mismo tiempo
+# REEMPLAZA "111122223333" por tu ID de cuenta real en el ARN
+eksctl create iamserviceaccount `
+  --cluster=platform-lab-cluster `
+  --namespace=kube-system `
+  --name=aws-load-balancer-controller `
+  --role-name AmazonEKSLoadBalancerControllerRole `
+  --attach-policy-arn=arn:aws:iam::111122223333:policy/AWSLoadBalancerControllerIAMPolicy `
+  --approve
+```
+
+**4. Instalamos el Controlador con Helm:**
+```powershell
+# 1. Agregamos el repositorio de EKS a Helm (donde está el paquete)
+helm repo add eks https://aws.github.io/eks-charts
+helm repo update
+
+# 2. Obtenemos el VPC ID de nuestro cluster (lo necesita el controlador)
+$VPC_ID = aws eks describe-cluster --name platform-lab-cluster --region us-east-1 --query "cluster.resourcesVpcConfig.vpcId" --output text
+Write-Host "VPC ID: $VPC_ID"
+
+# 3. Instalamos el chart
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller `
+  -n kube-system `
+  --set clusterName=platform-lab-cluster `
+  --set serviceAccount.create=false `
+  --set serviceAccount.name=aws-load-balancer-controller `
+  --set vpcId=$VPC_ID
+```
+
+> 🏆 **Buena práctica:** Siempre usar `--version` al instalar con Helm. Si no lo haces, instalará la última disponible hoy, pero si ejecutas el script mañana, podría instalar una versión mayor que rompa todo.
+
+Verificamos que los pods estén corriendo:
+```powershell
+# Deberías ver 2 pods en estado "Running"
+kubectl get deployment -n kube-system aws-load-balancer-controller
+```
 
 ---
 
-## Paso 4: Instalar NGINX Ingress Controller
+## Paso 3: Instalar NGINX Ingress Controller 🚪
 
-```bash
-# Agregar el repositorio de Helm (como agregar un PPA en Ubuntu)
+Ahora vamos a instalar a nuestro "Recepcionista". Le pediremos a Kubernetes que exponga este servicio hacia internet; como tenemos el AWS LB Controller instalado, esto creará automáticamente un NLB en AWS.
+
+```powershell
+# Agregamos el repositorio de NGINX a Helm
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 helm repo update
 
-# Crear namespace
+# Creamos un namespace dedicado para mantener todo ordenado
 kubectl create namespace ingress-nginx
-
-# Instalar (IMPORTANTE: versión >= 4.12.0 para parche de CVE-2025-1974)
-helm install ingress-nginx ingress-nginx/ingress-nginx \
-  --namespace ingress-nginx \
-  --version 4.12.0 \
-  --values helm/values-ingress-nginx.yaml
 ```
 
-> **⚠️ SEGURIDAD: Siempre pinnear la versión del chart de Helm.**
->
-> En marzo 2025 se descubrió "IngressNightmare" (CVE-2025-1974, CVSS 9.8):
-> una cadena de vulnerabilidades que permite ejecución remota de código
-> SIN autenticación en el controller. Afecta todas las versiones antes de
-> v1.12.1 (chart < 4.12.0). Cualquier pod en el cluster (o atacante con
-> acceso al cluster network) podía tomar control total del cluster.
->
-> **Siempre verifica la versión:** `helm list -n ingress-nginx`
+Instalamos con Helm (fijando la versión a la 4.12.0 para evitar sorpresas o CVEs recientes, como IngressNightmare CVE-2025-1974 que obligaba a usar versiones parchadas).
 
-Esperar ~2-3 minutos:
-```bash
-kubectl get pods -n ingress-nginx -w
+En la carpeta `helm/` ya tienes un archivo `values-ingress-nginx.yaml` con la configuración correcta. Los puntos clave del archivo:
+
+- **`replicaCount: 2`** — Para alta disponibilidad, queremos 2 "recepcionistas"
+- **`aws-load-balancer-type: "external"`** — Le dice al AWS LB Controller que cree un NLB
+- **`aws-load-balancer-nlb-target-type: "ip"`** — **Vital para Fargate**: enruta tráfico directo a las IPs de los pods
+- **`aws-load-balancer-scheme: "internet-facing"`** — El NLB es accesible desde internet
+- **`resources`** — **Obligatorio en Fargate**: sin esto los pods no arrancan
+- **`defaultBackend`** — Un pod que responde 404 cuando la URL no matchea ningún Ingress
+
+Y ejecutamos la instalación:
+```powershell
+# Instalamos usando nuestro archivo de valores
+helm install ingress-nginx ingress-nginx/ingress-nginx `
+  --namespace ingress-nginx `
+  --version 4.12.0 `
+  -f helm/values-ingress-nginx.yaml
 ```
 
-Cuando veas `1/1 Running`, está listo.
-
----
-
-## Paso 5: Obtener tu URL pública
-
-AWS tarda ~2 minutos en crear el Load Balancer y asignarle un DNS:
-
-```bash
-# Ver el servicio
-kubectl get svc ingress-nginx-controller -n ingress-nginx
-```
-
-Cuando la columna `EXTERNAL-IP` muestre un DNS (no `<pending>`):
-
-```bash
-# Guardar la URL en una variable
-export LB_URL=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-
-echo "Tu URL pública: http://$LB_URL"
-```
-
-Esa URL es accesible desde cualquier navegador del mundo.
-Si la abres ahora, verás un error 404 (porque no hay nada desplegado todavía).
-
----
-
-## Paso 6: Desplegar una app de prueba
-
-Mira el archivo `manifests/hello-app.yaml`. Tiene un Deployment y un Service.
-
-Puntos importantes del manifest:
-
-```yaml
-labels:
-  app.kubernetes.io/name: hello-app        # Label estándar de Kubernetes
-  app.kubernetes.io/component: web
-  app.kubernetes.io/part-of: cloud-platform
-```
-
-> **🏆 Buena práctica: Usar labels estándar `app.kubernetes.io/*`.**
->
-> Kubernetes recomienda estas labels. Herramientas como Grafana, ArgoCD,
-> Lens y kubectl las entienden automáticamente. Si inventas tus propias
-> labels (`app: mi-app`), funcionan pero pierdes compatibilidad.
->
-> Labels principales:
-> - `app.kubernetes.io/name` → nombre de la app
-> - `app.kubernetes.io/component` → web, api, worker, db
-> - `app.kubernetes.io/part-of` → sistema al que pertenece
-> - `app.kubernetes.io/managed-by` → quién lo gestiona (helm, argocd, kubectl)
-
-```yaml
-resources:
-  requests:
-    cpu: 50m       # Mínimo garantizado
-    memory: 64Mi
-  limits:
-    cpu: 100m      # Máximo permitido
-    memory: 128Mi
-```
-
-> **🏆 Buena práctica: SIEMPRE definir resources requests y limits.**
->
-> - `requests` = lo mínimo que el pod necesita. Kubernetes usa esto para
->   decidir dónde ponerlo. Fargate cobra por esto.
-> - `limits` = el máximo. Si el pod intenta usar más RAM, Kubernetes lo mata
->   (OOMKilled). Si intenta usar más CPU, lo throttlea (va más lento).
->
-> Regla general: limits = 2x requests.
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /
-    port: http
-  initialDelaySeconds: 5
-  periodSeconds: 10
-readinessProbe:
-  httpGet:
-    path: /
-    port: http
-  initialDelaySeconds: 3
-  periodSeconds: 5
-```
-
-> **🏆 Buena práctica: Siempre definir probes de salud.**
->
-> - `livenessProbe`: "¿Estás vivo?" Si falla 3 veces, Kubernetes reinicia el pod.
->   Útil para apps que se cuelgan (deadlock, memory leak).
-> - `readinessProbe`: "¿Estás listo para recibir tráfico?" Si falla, Kubernetes
->   deja de enviarle requests (pero no lo mata). Útil durante el arranque.
->
-> Sin probes, Kubernetes no sabe si tu app está muerta o viva.
-
-Ahora despliega:
-
-```bash
-# Crear namespace apps (si no existe)
-kubectl create namespace apps 2>/dev/null || true
-
-# Desplegar la app
-kubectl apply -f manifests/hello-app.yaml
-
-# Esperar a que esté lista
-kubectl get pods -n apps -w
-# Esperar hasta ver: 1/1 Running
+Esperamos unos minutos y obtenemos la URL del balanceador:
+```powershell
+# Busca en la columna "EXTERNAL-IP". Copia esa dirección gigante (ej. k8s-nlb-123.elb.amazonaws.com)
+kubectl get svc -n ingress-nginx
 ```
 
 ---
 
-## Paso 7: Crear el Ingress (regla de routing)
+## Paso 4: Instalar cert-manager 🔒
 
-El Ingress le dice a NGINX: "cuando llegue tráfico a `/`, mándalo al servicio `hello-app`".
+Un Ingress necesita manejar tráfico HTTPS seguro. En lugar de comprar e instalar certificados a mano (lo cual es terrible), usamos **cert-manager**. Este programa automatiza la creación y renovación de certificados (por ejemplo, con Let's Encrypt).
 
-Mira el archivo `manifests/hello-ingress.yaml`:
+> [!IMPORTANT]
+> **RESTRICCIÓN DE FARGATE:** El puerto por defecto del webhook de cert-manager (10250) choca con el kubelet interno en Fargate. **DEBEMOS** cambiarlo al `10260`.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: hello-app
-  namespace: apps
-spec:
-  ingressClassName: nginx    # Usar NGINX como controller (campo estándar)
-  rules:
-    - http:  # Sin "host" = acepta cualquier dominio (perfecto para DNS de AWS)
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: hello-app
-                port:
-                  number: 80
-```
-
-> **🏆 Buena práctica: Usar `ingressClassName` en vez de la anotación.**
->
-> La anotación `kubernetes.io/ingress.class: nginx` está deprecated desde
-> Kubernetes 1.22. El campo `spec.ingressClassName` es el estándar actual.
-> Funciona igual pero es la forma correcta y futura.
-
-Aplicar:
-```bash
-kubectl apply -f manifests/hello-ingress.yaml
-```
-
----
-
-## Paso 8: Probar acceso desde el navegador
-
-Espera ~30 segundos y luego:
-
-```bash
-curl http://$LB_URL
-```
-
-Debe responder:
-```
-Hola desde EKS! La plataforma funciona. 🚀
-```
-
-**¡También puedes abrir esa URL en tu navegador o celular!**
-
----
-
-## Paso 9: Aplicar NetworkPolicies (seguridad de red)
-
-Por defecto, cualquier pod puede hablar con cualquier otro pod en el cluster.
-Eso es peligroso: si un atacante compromete tu app, puede moverse lateralmente
-a Prometheus, ArgoCD o cualquier otro servicio.
-
-```bash
-kubectl apply -f manifests/network-policy-apps.yaml
-```
-
-> **🏆 Buena práctica: NetworkPolicies en CADA namespace.**
->
-> Kubernetes no tiene aislamiento de red por defecto. Las NetworkPolicies
-> son como firewalls entre namespaces. La regla de oro es:
-> 1. Bloquear TODO el tráfico entrante (default-deny)
-> 2. Permitir solo lo que necesitas explícitamente
->
-> En este caso, los pods de "apps" solo aceptan tráfico del Ingress Controller
-> y solo pueden salir a internet y hablar con DNS. Nada más.
-
-Verificar que la policy está activa:
-```bash
-kubectl get networkpolicy -n apps
-# NAME                    POD-SELECTOR   AGE
-# default-deny-ingress   <none>         5s
-# allow-dns-egress       <none>         5s
-```
-
----
-
-## Paso 10: Instalar cert-manager (para HTTPS)
-
-cert-manager gestiona certificados TLS automáticamente. Aunque no tengas dominio
-propio, lo instalamos porque en la etapa 3 Grafana puede usarlo.
-
-```bash
-# Agregar repo
+```powershell
+# Agregamos el repositorio
 helm repo add jetstack https://charts.jetstack.io
 helm repo update
 
-# Crear namespace
-kubectl create namespace cert-manager
-
-# Instalar
-helm install cert-manager jetstack/cert-manager \
-  --namespace cert-manager \
-  --version v1.16.0 \
-  --values helm/values-cert-manager.yaml
-
-# Verificar (3 pods deben estar Running)
-kubectl get pods -n cert-manager
+# Instalamos cert-manager en su versión v1.16.2
+helm install cert-manager jetstack/cert-manager `
+  --namespace cert-manager `
+  --create-namespace `
+  --version v1.16.2 `
+  --set crds.enabled=true `
+  --set webhook.securePort=10260
 ```
 
-Crear el ClusterIssuer self-signed (para labs sin dominio):
-```bash
+Creamos un **ClusterIssuer** (el que emite los certificados). Para este laboratorio, usaremos uno "Self-Signed" (Auto-firmado):
+
+```yaml
+# cluster-issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+```
+```powershell
+kubectl apply -f cluster-issuer.yaml
+```
+
+---
+
+## Paso 5: Desplegar nuestra primera app de prueba 🚀
+
+¡Llegó la hora de la verdad! Vamos a desplegar una pequeña aplicación web y exponerla a internet.
+
+En la carpeta `manifests/` ya tienes los archivos necesarios:
+- `hello-app.yaml` — Deployment + Service de la app
+- `hello-ingress.yaml` — Regla de Ingress para exponer la app
+- `cluster-issuer-selfsigned.yaml` — Emisor de certificados para el lab
+- `network-policy-apps.yaml` — Reglas de firewall interno (Paso 6)
+
+> **¿Qué contiene `hello-app.yaml`?** Un Deployment con 2 réplicas de `hashicorp/http-echo:0.2.3` 
+> (una app simple que devuelve un texto). Incluye buenas prácticas que vale la pena entender:
+> - **Labels estándar** (`app.kubernetes.io/name`) — Convención de K8s para identificar recursos
+> - **Resource requests + limits** — **Obligatorio en Fargate** (sin esto el pod no arranca)
+> - **Liveness + readiness probes** — K8s revisa periódicamente que tu app esté viva y lista
+> - **Security context** — Restringe permisos del contenedor (sin escalamiento de privilegios)
+
+Aplícalo en tu clúster:
+```powershell
+# Creamos el namespace apps (matchea con el Fargate Profile fp-apps)
+kubectl create namespace apps
+
+# Desplegamos la app (Deployment + Service)
+kubectl apply -f manifests/hello-app.yaml
+
+# Creamos el issuer de certificados self-signed
 kubectl apply -f manifests/cluster-issuer-selfsigned.yaml
+
+# Creamos la regla de Ingress que expone la app en /
+kubectl apply -f manifests/hello-ingress.yaml
+
+# Esperamos ~1-2 min (cold start de Fargate)
+kubectl get pods -n apps -w
 ```
 
-> **¿Qué es un ClusterIssuer?**
-> Le dice a cert-manager de dónde obtener certificados. `selfsigned` genera
-> certificados que funcionan pero el browser muestra advertencia de "no seguro".
-> Cuando compres un dominio, cambias a Let's Encrypt (gratis y válido).
+**Prueba:**
+```powershell
+# Obtenemos la URL del NLB
+$NLB_URL = kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath="{.status.loadBalancer.ingress[0].hostname}"
+Write-Host "URL: http://$NLB_URL"
+
+# Probamos con curl
+curl "http://$NLB_URL/"
+```
+¡Deberías ver: `Hola desde EKS! La plataforma funciona. 🎉`!
 
 ---
 
-## ✅ Etapa 2 completada
+## Paso 6: Seguridad con NetworkPolicies 🛡️
 
-Ahora tienes:
-- ✅ NGINX Ingress Controller con 2 réplicas
-- ✅ Load Balancer con URL pública de AWS
-- ✅ App de prueba accesible desde cualquier navegador
-- ✅ cert-manager listo para gestionar certificados
-- ✅ Routing por path funcionando
+**¿Por qué necesitamos esto?**
+Por defecto, Kubernetes es como una fiesta donde todos los invitados pueden hablar entre sí libremente. Si un hacker entra a un pod (ej. frontend), puede conectarse a tu base de datos fácilmente. 
+Las **NetworkPolicies** son como "cortafuegos" (Firewalls) internos que prohíben la comunicación por defecto y sólo permiten lo estrictamente necesario.
 
-**Siguiente paso:** Ve a `etapa-03-observability/README.md`
+En la carpeta `manifests/` ya tienes el archivo `network-policy-apps.yaml` que hace esto:
 
-En la siguiente etapa instalarás Prometheus y Grafana, y podrás acceder
-a Grafana directamente por `http://<TU_URL>/grafana` gracias al Ingress
-que acabas de configurar.
+1. **Bloquea TODO el tráfico entrante** a los pods del namespace `apps` por defecto
+2. **Solo permite** tráfico desde el namespace `ingress-nginx` (para que el Ingress funcione)
+3. **Permite DNS** (para que los pods resuelvan nombres)
+4. **Permite salida a internet** (para APIs externas) pero **bloquea acceso a la VPC interna**
+5. **Permite comunicación intra-namespace** (pods de apps entre sí)
+
+```powershell
+kubectl apply -f manifests/network-policy-apps.yaml
+```
+
+> 🏆 **Buena práctica:** En producción, SIEMPRE aplica NetworkPolicies.
+> Sin ellas, un pod comprometido podría acceder a Prometheus, ArgoCD,
+> o cualquier otro servicio del cluster.
 
 ---
 
-## Desinstalar (solo si quieres quitar esta etapa sin destruir el cluster)
+## 🛑 Errores comunes y soluciones
 
-```bash
-kubectl delete -f manifests/
-helm uninstall cert-manager -n cert-manager
+| Error / Síntoma | Posible Causa | Solución |
+|-----------------|---------------|----------|
+| Los pods del Ingress están en estado `Pending` por siempre. | Fargate no sabe dónde colocar los pods. | Verifica que tienes un Fargate Profile creado para el namespace `ingress-nginx`. |
+| El balanceador no se crea en AWS (EXTERNAL-IP dice `<pending>`). | AWS LB Controller no tiene permisos. | Verifica que creaste el ServiceAccount de IAM (IRSA) y asociaste la política correcta. |
+| Cert-manager se reinicia o tira error de Webhook Timeout. | Conflicto de puerto 10250 en Fargate. | Actualiza los values de Helm: `--set webhook.securePort=10260`. |
+| Error "OIDC provider already exists". | Ya corriste el comando OIDC antes. | Ignora el error, tu clúster ya tiene OIDC configurado. |
+
+---
+
+## 🧹 Desinstalar esta etapa
+
+Si quieres borrar todo lo que hicimos en esta etapa (para ahorrar dinero):
+
+```powershell
+# 1. Borrar la app y las reglas
+kubectl delete -f manifests/hello-ingress.yaml
+kubectl delete -f manifests/hello-app.yaml
+kubectl delete -f manifests/network-policy-apps.yaml
+kubectl delete -f manifests/cluster-issuer-selfsigned.yaml
+
+# 2. Desinstalar NGINX Ingress y cert-manager
 helm uninstall ingress-nginx -n ingress-nginx
-kubectl delete namespace cert-manager ingress-nginx apps
+helm uninstall cert-manager -n cert-manager
+
+# 3. Desinstalar el AWS LB Controller
+helm uninstall aws-load-balancer-controller -n kube-system
+eksctl delete iamserviceaccount --cluster platform-lab-cluster --name aws-load-balancer-controller --namespace kube-system --region us-east-1
+
+# 4. Borrar namespaces
+kubectl delete namespace apps
+kubectl delete namespace ingress-nginx
+kubectl delete namespace cert-manager
+
+# (El NLB se borrará automáticamente cuando se desinstale NGINX Ingress ~1-2 min)
 ```
 
 ---
 
-## Errores comunes
+## 🎓 Lecciones Aprendidas
 
-| Error | Qué significa | Solución |
-|-------|--------------|----------|
-| EXTERNAL-IP en `<pending>` mucho tiempo | Fargate profile no existe para `ingress-nginx` | Verificar etapa 1 tiene el profile |
-| 404 al acceder al LB | No hay Ingress resource | Aplicar `hello-ingress.yaml` |
-| 503 Service Unavailable | Los pods de la app no están Ready | `kubectl get pods -n apps` y esperar |
-| Pods de cert-manager en Pending | Namespace sin Fargate profile | Verificar profile para `cert-manager` |
+1. **La comunicación en la nube es explícita:** K8s por sí solo no crea recursos en AWS. Necesitamos Controladores (como el AWS LB Controller) y permisos mediante identidades puente (IRSA).
+2. **Fargate tiene sus propias reglas:** Hemos visto cómo Fargate nos obliga a definir siempre Recursos (requests/limits) y nos cambia los puertos de ciertas herramientas (cert-manager).
+3. **Todo como código:** Un Ingress no es más que un manifiesto de texto. Si nuestro clúster muere hoy, levantaríamos la misma arquitectura mañana en 5 minutos corriendo estos mismos comandos.
+
+¡Felicidades! Tienes tu puerta de entrada configurada. En la **Etapa 3** instalaremos **Prometheus + Grafana** para monitorear todo lo que pasa en tu clúster (CPU, memoria, pods, errores) con dashboards visuales.

@@ -1,284 +1,247 @@
-# Etapa 5: Datadog Monitoring (Enterprise)
+# Etapa 5: Datadog Monitoring (Nivel Enterprise) 🐶📊
 
-## Qué vamos a hacer
+¡Hola de nuevo! En esta última etapa de nuestro laboratorio, vamos a explorar **Datadog**, una plataforma comercial (de pago) que es el estándar de la industria en muchas empresas grandes para monitorización, logs y rendimiento de aplicaciones (APM).
 
-Integrar Datadog con el cluster EKS. Datadog es la herramienta de monitoreo
-más usada en empresas grandes. A diferencia de Prometheus (que corre dentro
-de tu cluster), Datadog envía todo a su cloud y tú ves los datos en datadoghq.com.
+## 📋 Resumen
 
-Al terminar esta etapa vas a ver tu cluster completo en la UI de Datadog:
-pods, containers, métricas, logs, todo.
+En esta etapa vamos a:
+1. Crear una cuenta de prueba gratuita en Datadog.
+2. Aprender qué es un **Operator** y un **CRD** en Kubernetes.
+3. Instalar el Datadog Operator en nuestro clúster EKS.
+4. Conectar nuestro clúster EKS Fargate con Datadog.
+5. Aprender cómo destruir completamente el laboratorio al finalizar.
 
----
-
-## Antes de empezar
-
-**Prerequisitos:**
-- ✅ Etapa 1 completada (cluster EKS corriendo)
-- ✅ Cuenta Datadog creada (14 días gratis con todo)
-
-**Costo:**
-
-| Recurso | Costo |
-|---------|-------|
-| **Datadog (14 días trial)** | **$0** |
-| Datadog Free (después del trial) | $0 (5 hosts, 1 día retención) |
-| Fargate - Operator + Agent | ~$0.03/hr |
+**Estimación de Costos:**
+| Servicio | Costo Estimado |
+|----------|----------------|
+| Datadog (Trial de 14 días) | **$0.00** (Es gratis la prueba) |
+| EKS Fargate Pods | ~$0.10 por un par de horas |
 
 ---
 
-## Paso 1: Crear cuenta Datadog
+## 🧠 Conceptos Previos
 
-1. Ir a https://www.datadoghq.com/
-2. Click "Get Started Free"
-3. Seleccionar región: **US1** (datadoghq.com)
-4. Completar registro
+### ¿Qué es Datadog?
+Datadog es una plataforma SaaS (Software as a Service) todo en uno. A diferencia de Prometheus (que es de código abierto y tú lo administras), Datadog almacena tus datos en sus servidores y te da una interfaz web hermosa y lista para usar. Ofrece métricas, logs, trazas de red y APM (Application Performance Monitoring) en un solo lugar.
 
-El trial de 14 días incluye TODAS las features (APM, Logs, Infra, etc.)
+### 🆚 Prometheus vs Datadog
+¿Cuándo deberías usar cada uno?
 
----
+| Característica | Prometheus + Grafana (Open Source) | Datadog (Enterprise) |
+|----------------|------------------------------------|----------------------|
+| **Costo** | Gratis (solo pagas la infraestructura donde corre) | Pago (por host/contenedor, puede ser muy costoso) |
+| **Administración**| Tú mantienes los servidores, discos y actualizaciones | Ellos mantienen todo (SaaS) |
+| **Setup inicial**| Medio/Complejo (requiere configurar dashboards) | Muy fácil (dashboards automáticos) |
+| **Integraciones**| Buenas, pero a veces requieren trabajo manual | Excelentes, cientos de plugins oficiales |
+| **Ideal para...**| Startups, empresas con presupuesto ajustado, puristas open source | Grandes empresas (Bancos, Fintech) con presupuesto que prefieren pagar para no gestionar la monitorización |
 
-## Paso 2: Obtener API Keys
+> [!NOTE] ¿Por qué aprender ambos?
+> En el mercado laboral (especialmente en LATAM y Colombia), verás empresas divididas. Las startups suelen usar Prometheus, mientras que los bancos y grandes corporativos usan Datadog o Dynatrace. ¡Saber ambos te hace un perfil DevOps muy completo!
 
-En la UI de Datadog:
-1. Organization Settings → API Keys → "New Key" → nombre: "eks-lab" → copiar
-2. Organization Settings → Application Keys → "New Key" → nombre: "eks-lab" → copiar
+### ¿Qué es un Operator en Kubernetes? 🤖
+Hasta ahora, hemos instalado aplicaciones usando Helm que crean Pods y Services. Pero, ¿qué pasa si una aplicación es muy compleja y requiere mantenimiento constante, como hacer backups o reconfigurarse sola?
 
-> **🏆 Buena práctica: Nunca poner API keys en archivos que van a Git.**
->
-> Las keys se crean como Kubernetes Secrets (desde la terminal, no desde un archivo).
-> El `.gitignore` ya excluye archivos `*-secret.yaml` por si acaso.
+Un **Operator** es como un "robot administrador" dentro de tu clúster. Es un Pod que vigila tu clúster y sabe cómo administrar una aplicación específica (en este caso, Datadog).
 
----
-
-## Paso 3: Entender qué es un Operator
-
-Hasta ahora instalaste cosas con Helm directamente (NGINX, Prometheus, ArgoCD).
-Datadog usa un patrón diferente: **Operator**.
-
-```
-HELM CHART normal:
-  helm install → crea Deployments, Services, etc.
-  Si quieres cambiar algo → helm upgrade
-  Helm NO vigila nada después de instalar
-
-OPERATOR:
-  helm install → instala el Operator (un programa que corre en el cluster)
-  Tú creas un Custom Resource (un YAML especial tipo "DatadogAgent")
-  El Operator LEE ese YAML y crea/configura todo automáticamente
-  Si algo se rompe, el Operator lo arregla solo
-  Si cambias el YAML, el Operator aplica los cambios
+```text
++-------------------+       Vigila       +-----------------------+
+|  Tú (Humano)      | -----------------> | Tu Clúster Kubernetes |
++-------------------+                    +-----------------------+
+                                                   ^
+                                                   | Administra
++-------------------+       Vigila       +-----------------------+
+| Operator (Robot)  | -----------------> | Pods de Datadog       |
++-------------------+                    +-----------------------+
 ```
 
-> **🏆 Buena práctica: Usar Operators para software complejo.**
->
-> Un Operator es como tener un "admin robot" dentro del cluster que sabe
-> cómo gestionar un software específico. Para cosas simples (NGINX) un
-> Helm chart basta. Para cosas complejas (Datadog, bases de datos), un
-> Operator es mejor porque puede hacer rolling updates, backups, etc.
+### ¿Qué es un CRD (Custom Resource Definition)?
+Kubernetes trae objetos de fábrica: `Pod`, `Deployment`, `Service`. 
+Un **CRD** te permite inventar tus propios objetos. Cuando instalas el Datadog Operator, él crea un nuevo CRD llamado `DatadogAgent`.
 
-**¿Qué es un CRD (Custom Resource Definition)?**
-
-Kubernetes viene con tipos de recursos nativos: Pod, Service, Deployment, etc.
-Un CRD te permite crear NUEVOS tipos. Datadog crea el tipo `DatadogAgent`.
-Cuando aplicas un YAML de tipo `DatadogAgent`, el Operator lo detecta y actúa.
+**Flujo del Operator + CRD:**
+1. Tú escribes un YAML con `kind: DatadogAgent`.
+2. El Operator lee ese YAML.
+3. El Operator, como buen robot, crea los `Deployments` necesarios para cumplir lo que le pediste.
 
 ---
 
-## Paso 4: Crear namespace y secret
+## ⚠️ CRÍTICO: Limitaciones de Fargate con Datadog
 
-```bash
-# Crear namespace
+Normalmente, Datadog se instala en Kubernetes usando un **DaemonSet**. 
+¿Recuerdas qué es un DaemonSet? Es un tipo de controlador que asegura que haya exactamente **un Pod corriendo en cada servidor físico/virtual (Nodo)** de tu clúster. Esto es ideal para monitorización porque ese Pod recopila las métricas de todos los demás contenedores en ese mismo servidor.
+
+**🚨 ¡Pero nosotros estamos usando EKS Fargate!**
+Fargate **NO soporta DaemonSets** (porque no tienes acceso a los Nodos/servidores subyacentes, AWS los administra por ti y cada Pod corre en su propia mini-VM aislada).
+
+Por lo tanto:
+- No podemos usar el `nodeAgent` (el agente tradicional).
+- Datadog en Fargate funciona usando el patrón **Sidecar** (inyectando un contenedor de Datadog extra *dentro* del Pod de tu aplicación).
+- En Fargate no hay métricas de host (CPU de la máquina real), no hay eBPF y la recolección de logs es diferente.
+
+> [!IMPORTANT] Para este laboratorio:
+> Configurar inyección automática de sidecars es un poco avanzado y costoso en recursos para un lab. Así que **solo instalaremos el Operator y el Cluster Agent**. Esto será suficiente para que Datadog lea los objetos de tu clúster (Deployments, Pods, Nodos Fargate) y los muestre en su interfaz web, pero no recolectaremos métricas profundas de las aplicaciones.
+> 
+> En un entorno de producción real en Fargate, sí configurarías la inyección de sidecars a través del Operator.
+
+---
+
+## 🛠️ Paso a Paso
+
+### Paso 0: Crear cuenta en Datadog
+
+1. Ve a [datadoghq.com](https://www.datadoghq.com/) y haz clic en "Free Trial".
+2. Regístrate (tienes 14 días gratis, no piden tarjeta de crédito).
+3. **MUY IMPORTANTE**: Cuando te pregunte la región de tus datos, selecciona **US1** (datadoghq.com). El manifiesto está configurado para esa región.
+4. Al entrar, Datadog te pedirá configurar un Agente. Ignora eso por ahora y ve al menú izquierdo inferior: **Organization Settings > API Keys**.
+5. Copia tu **API Key** y luego ve a **Application Keys** y crea una nueva **App Key**. Cópiala también.
+
+### Paso 1: Crear namespace y secret
+
+Nunca debemos guardar contraseñas o tokens en nuestros archivos YAML que subimos a Git. Usaremos un `Secret` de Kubernetes.
+
+Abre PowerShell en tu PC y ejecuta:
+
+```powershell
+# 1. Crear el namespace (nuestro Fargate Profile lo detectará)
 kubectl create namespace datadog
 
-# Crear secret con tus API keys (REEMPLAZAR con tus keys reales)
-kubectl create secret generic datadog-keys \
-  --namespace datadog \
-  --from-literal=api-key=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX \
-  --from-literal=app-key=YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+# 2. Crear el Secret con tus llaves (Reemplaza con tus llaves reales)
+# NO guardes tus llaves reales en este README
+$DATADOG_API_KEY="TU_API_KEY_AQUI"
+$DATADOG_APP_KEY="TU_APP_KEY_AQUI"
+
+kubectl create secret generic datadog-keys `
+  --namespace datadog `
+  --from-literal=api-key=$DATADOG_API_KEY `
+  --from-literal=app-key=$DATADOG_APP_KEY
 ```
+*Comentario:* Creamos un lugar seguro (`Secret`) llamado `datadog-keys` para que Datadog lea las credenciales sin que estén en texto plano en nuestros archivos.
 
-Verificar:
-```bash
-kubectl get secret datadog-keys -n datadog
-# Debe existir
-```
+### Paso 2: Instalar el Datadog Operator
 
----
+Vamos a instalar al "robot administrador" usando Helm.
 
-## Paso 5: Instalar el Datadog Operator
-
-```bash
-# Agregar repo
+```powershell
+# 1. Agregar el repositorio de Helm de Datadog
 helm repo add datadog https://helm.datadoghq.com
 helm repo update
 
-# Instalar el Operator
-helm install datadog-operator datadog/datadog-operator \
-  --namespace datadog \
-  --version 2.5.0 \
-  --values helm/values-operator.yaml
+# 2. Instalar el Operator (Fijamos la versión 2.5.0 por estabilidad en este lab)
+helm install datadog-operator datadog/datadog-operator `
+  --namespace datadog `
+  --version 2.5.0
+```
+*Comentario:* Helm descarga e instala el Operator. ¡Ojo! Aún no hemos instalado Datadog, solo hemos instalado al robot que instalará Datadog por nosotros.
 
-# Verificar
+Verifica que el robot esté corriendo:
+```powershell
 kubectl get pods -n datadog
-# datadog-operator-xxxxx  1/1  Running
 ```
+Deberías ver un pod llamado `datadog-operator-...` en estado `Running`.
 
-El Operator ya está corriendo pero no hace nada todavía.
-Necesita que le digas QUÉ hacer → eso es el Custom Resource.
+### Paso 3: Revisar y Aplicar el DatadogAgent
 
----
+Ahora le daremos instrucciones al Operator a través de nuestro CRD. Abre el archivo `manifests/datadog-agent.yaml` y revísalo.
 
-## Paso 6: Revisar el DatadogAgent manifest
+Notarás que eliminamos por completo la sección `nodeAgent` y activamos el `clusterAgent`. Además, referenciamos nuestro secreto `datadog-keys`.
 
-Abre `manifests/datadog-agent.yaml`. Este es el Custom Resource que le dice
-al Operator cómo configurar Datadog:
-
-```yaml
-apiVersion: datadoghq.com/v2alpha1
-kind: DatadogAgent          # ← Tipo custom (no existe en Kubernetes vanilla)
-metadata:
-  name: datadog
-spec:
-  global:
-    credentials:
-      apiSecret:
-        secretName: datadog-keys   # ← Referencia al secret que creaste
-        keyName: api-key
-    tags:
-      - "env:development"
-      - "cluster:platform-cluster"
-      - "team:devops"
-```
-
-> **🏆 Buena práctica: Tags en todo.**
->
-> Los tags `env`, `cluster` y `team` aparecen en TODAS las métricas de Datadog.
-> Puedes filtrar dashboards por ambiente, cluster o equipo. En una empresa
-> con múltiples clusters, esto es esencial para no mezclar datos.
-
-```yaml
-  features:
-    logCollection:
-      enabled: true
-      containerCollectAll: true  # Recolectar logs de TODOS los containers
-    apm:
-      enabled: true             # Application Performance Monitoring (traces)
-    orchestratorExplorer:
-      enabled: true             # Vista de Kubernetes en Datadog UI
-```
-
----
-
-## Paso 7: Aplicar el DatadogAgent
-
-```bash
+```powershell
+# Aplicar el manifiesto CRD
 kubectl apply -f manifests/datadog-agent.yaml
-
-# Esperar ~2 min
-kubectl get pods -n datadog -w
 ```
+*Comentario:* Aquí le entregamos nuestro YAML al clúster. El Operator lo detecta y dice "¡Oh! Quieres un Cluster Agent de Datadog. ¡Yo lo creo!".
 
-Pods esperados:
+Verifica los pods:
+```powershell
+kubectl get pods -n datadog
 ```
-datadog-operator-xxxxx          1/1  Running
-datadog-cluster-agent-xxxxx     1/1  Running
-datadog-xxxxx                   3/3  Running  (agent + trace-agent + process-agent)
-```
+Deberías ver aparecer un pod que empieza con `datadog-cluster-agent-...`
+
+🏆 **Buena práctica:** Usar Operators simplifica enormemente la gestión del ciclo de vida de aplicaciones complejas. Si Datadog saca una nueva versión, solo actualizas tu YAML y el Operator se encarga del proceso de actualización de forma segura.
+
+### Paso 4: Verificar en Datadog UI
+
+1. Vuelve a la página web de Datadog.
+2. En el menú de la izquierda, ve a **Infrastructure > Kubernetes**.
+3. ¡Magia! Deberías ver aparecer tu clúster `platform-lab-cluster` 🥳.
+4. Puedes explorar los Nodos (que en este caso son perfiles Fargate), los Deployments y los Pods.
+5. *Nota:* Puede tardar unos 5 minutos en aparecer la información después de que el pod esté `Running`.
 
 ---
 
-## Paso 8: Verificar en Datadog UI
+## 🐞 Errores comunes y soluciones
 
-Espera ~5 minutos (los datos tardan en llegar) y luego:
-
-1. **Infrastructure:** https://app.datadoghq.com/infrastructure
-   - Tu cluster debe aparecer listado
-
-2. **Kubernetes:** https://app.datadoghq.com/orchestration/overview/pod
-   - Vista de todos los pods con métricas
-
-3. **Containers:** https://app.datadoghq.com/containers
-   - Containers corriendo con CPU/RAM en tiempo real
-
-4. **Logs:** https://app.datadoghq.com/logs
-   - Logs de todos los pods (si habilitaste logCollection)
+| Error | Causa Posible | Solución |
+|-------|---------------|----------|
+| El pod del Cluster Agent dice `CrashLoopBackOff` | Credenciales incorrectas en el Secret | Borra el secret, recréalo verificando que copiaste bien la API y APP key, y reinicia el pod. |
+| El pod se queda en `Pending` por siempre | Problemas con Fargate Profile | Revisa si creaste el Fargate profile `fp-datadog` para el namespace `datadog` en la Etapa 1. |
+| No veo datos en la web de Datadog | Región equivocada | Si creaste tu cuenta en EU (Europa) pero tu agent apunta a US, los datos no llegarán. Revisa el valor `site:` en el yaml. |
+| Error `nodeAgent no es compatible` (si intentas copiar tutoriales de internet) | EKS Fargate no soporta DaemonSets | Elimina todo lo relacionado con `nodeAgent` de tu YAML. En Fargate usamos Cluster Agent + Sidecars. |
 
 ---
 
-## Paso 9: Comparar Prometheus vs Datadog
+## 📚 Lecciones Aprendidas
 
-Ahora que tienes ambos, puedes comparar:
-
-| Aspecto | Prometheus + Grafana (Etapa 3) | Datadog (Etapa 5) |
-|---------|-------------------------------|-------------------|
-| **Costo** | Gratis (solo infra ~$0.11/hr) | $15/host/mes (o trial gratis) |
-| **Dónde corre** | Dentro de tu cluster | Cloud de Datadog |
-| **Si el cluster muere** | Pierdes el monitoreo | Sigues viendo datos históricos |
-| **Setup** | Más manual (values, ingress) | Más automático (operator) |
-| **Retención** | Tú decides (disco) | 15 meses incluidos |
-| **APM/Tracing** | Necesitas Jaeger o Tempo | Incluido |
-| **Logs** | Necesitas Loki | Incluido |
-| **Alertas** | Alertmanager (config YAML) | UI visual fácil |
-| **Dashboards** | Grafana (muy flexible) | Preconfigurados + custom |
-| **En entrevistas** | "Conozco Prometheus y Grafana" | "Conozco Datadog" |
-
-**Conclusión:** En el mercado colombiano te van a pedir conocer ambos.
-Prometheus/Grafana para empresas que no quieren pagar licencias.
-Datadog para empresas grandes con presupuesto.
+1. **Enterprise vs Open Source:** Herramientas como Datadog ahorran horas de configuración de dashboards a cambio de un costo monetario.
+2. **El poder de los Operators:** Los Operators extienden Kubernetes permitiendo automatizar el día a día (Día 2 operations) de herramientas complejas.
+3. **El desafío de Serverless:** EKS Fargate es genial para no administrar servidores, pero rompe paradigmas clásicos como los DaemonSets. Siempre debes verificar si la herramienta de monitoreo/seguridad que quieres usar es compatible con Fargate.
 
 ---
 
-## ✅ Etapa 5 completada
+## 🔴 DESTRUIR TODO (Final del Proyecto) 🔴
 
-Ahora tienes:
-- ✅ Datadog Operator corriendo
-- ✅ Agent recolectando métricas, logs y traces
-- ✅ Cluster visible en Datadog UI
-- ✅ Entiendes la diferencia entre Operator y Helm chart normal
-- ✅ Entiendes CRDs (Custom Resource Definitions)
+¡Has terminado el laboratorio completo! 🏆
+Dado que estamos usando recursos en la nube de AWS, **es crítico limpiar todo** para evitar que te sigan cobrando por el clúster. Vamos a destruir todo en orden inverso.
 
-**🎉 ¡Completaste todas las etapas!**
+Abre PowerShell en tu PC y ejecuta estos comandos con paciencia:
 
----
-
-## Desinstalar
-
-```bash
-kubectl delete -f manifests/datadog-agent.yaml
+### 1. Eliminar Datadog y Prometheus (Etapas 4 y 5)
+```powershell
+# Borrar CRD de Datadog
+kubectl delete -f cloud-platform-engineering/etapa-05-datadog-monitoring/manifests/datadog-agent.yaml
+# Borrar Operator de Datadog
 helm uninstall datadog-operator -n datadog
-kubectl delete secret datadog-keys -n datadog
 kubectl delete namespace datadog
+
+# Borrar kube-prometheus-stack
+helm uninstall prometheus -n monitoring
+kubectl delete namespace monitoring
 ```
 
----
+### 2. Eliminar Ingress, Cert-Manager y Apps (Etapas 2 y 3)
+```powershell
+# Borrar nuestra app y namespace
+kubectl delete namespace labs
 
-## 🔴 Destruir TODO (fin del lab)
+# Borrar ingress-nginx
+helm uninstall ingress-nginx -n ingress-nginx
 
-Ahora sí, destruye toda la infraestructura:
-
-```bash
-# Volver a la raíz del proyecto
-cd ../../
-
-# Usar el script de destrucción
-chmod +x scripts/destroy-all.sh
-./scripts/destroy-all.sh
+# Borrar cert-manager
+helm uninstall cert-manager -n cert-manager
+kubectl delete namespace cert-manager
+kubectl delete namespace ingress-nginx
 ```
 
-Verificar:
-```bash
-aws eks list-clusters --region us-east-1
-# { "clusters": [] }  ← Nada corriendo, nada cobrando
-```
+### 3. Borrar el clúster de EKS (Etapa 1 - Consola de AWS)
+Dado que creamos el clúster desde la consola de AWS, debemos borrarlo desde ahí:
 
----
+1. Ve a la consola de AWS > **EKS** > **Clusters**.
+2. Selecciona `platform-lab-cluster`.
+3. En la pestaña **Compute**, selecciona todos los **Fargate Profiles** (fp-apps, fp-datadog, fp-argocd, etc.) y presiona **Delete**. *(Esto toma unos 5-10 minutos, espera a que terminen)*.
+4. Una vez borrados los perfiles, ve a la esquina superior derecha y presiona **Delete cluster**. Escribe el nombre del clúster para confirmar. *(Esto toma unos 10 minutos)*.
 
-## Errores comunes
+### 4. Borrar la Red (VPC)
+1. Ve a la consola de AWS > **VPC**.
+2. Selecciona tu VPC `platform-lab-vpc`.
+3. Haz clic en **Actions > Delete VPC**.
+4. Te pedirá confirmar escribiendo "delete". Esto borrará las subredes, el Internet Gateway y la VPC al mismo tiempo.
 
-| Error | Qué significa | Solución |
-|-------|--------------|----------|
-| "Invalid API Key" | Key incorrecta en el secret | Recrear el secret con la key correcta |
-| Agent en CrashLoopBackOff | Configuración inválida | `kubectl logs <pod> -n datadog -c agent` |
-| No aparece en Datadog UI | Datos tardan ~5 min | Esperar y refrescar |
-| Pods en Pending | Namespace sin Fargate profile | Verificar profile `datadog` en etapa 1 |
+### 5. Borrar los Roles de IAM
+1. Ve a la consola de AWS > **IAM** > **Roles**.
+2. Busca y borra `platform-lab-cluster-role`.
+3. Busca y borra `platform-lab-fargate-role`.
+
+> [!CAUTION] ¡Verificación Final!
+> Ve a tu consola de AWS y revisa en **EKS** y **VPC** que no quede nada. Recuerda que la cuenta es tuya y los cargos extra se cobrarán a tu tarjeta. ¡Mejor revisar dos veces!
+
+¡Felicidades por completar este viaje construyendo una plataforma Cloud Native en EKS Fargate! 🎉🚀

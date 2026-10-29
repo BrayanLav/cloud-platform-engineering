@@ -1,91 +1,51 @@
-###############################################################################
-# kube-prometheus-stack - EKS con Fargate
-###############################################################################
+## helm/values-prometheus.yaml
+# Configuración específica para EKS en Fargate
 
-grafana:
-  enabled: true
-  adminUser: admin
-  adminPassword: ""  # Se configura vía kubectl secret (ver README)
+# Desactivar componentes del control plane que no son accesibles en EKS
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
 
-  # Para que funcione detrás del Ingress con subpath /grafana
-  grafana.ini:
-    server:
-      root_url: "%(protocol)s://%(domain)s/grafana"
-      serve_from_sub_path: true
+# Desactivar alertas por defecto para componentes desactivados
+defaultRules:
+  create: true
+  rules:
+    kubeScheduler: false
+    kubeControllerManager: false
+    kubeProxy: false
+    kubeApiserver: false
+    kubeEtcd: false
 
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: 500m
-      memory: 1Gi
-
-  persistence:
-    enabled: true
-    size: 5Gi
-    storageClassName: gp2
-
-  defaultDashboardsEnabled: true
-  defaultDashboardsTimezone: America/Bogota
-
-prometheus:
-  prometheusSpec:
-    resources:
-      requests:
-        cpu: 500m
-        memory: 1Gi
-      limits:
-        cpu: 1000m
-        memory: 2Gi
-
-    retention: 7d
-    retentionSize: "8GB"
-
-    storageSpec:
-      volumeClaimTemplate:
-        spec:
-          storageClassName: gp2
-          accessModes: ["ReadWriteOnce"]
-          resources:
-            requests:
-              storage: 10Gi
-
-    scrapeInterval: 30s
-    evaluationInterval: 30s
-
-    # Ruta base para funcionar con Ingress subpath
-    routePrefix: /prometheus
-    externalUrl: /prometheus
-
-alertmanager:
-  alertmanagerSpec:
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 200m
-        memory: 512Mi
-
-kube-state-metrics:
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-
-# node-exporter NO funciona en Fargate (necesita DaemonSet)
+# Fargate NO soporta DaemonSets, por lo que node-exporter no funcionará
 nodeExporter:
   enabled: false
 
-prometheusOperator:
-  resources:
-    requests:
-      cpu: 200m
-      memory: 256Mi
-    limits:
-      cpu: 400m
-      memory: 512Mi
+prometheus:
+  prometheusSpec:
+    # Fargate NO soporta volúmenes EBS
+    # En producción usaríamos Amazon Managed Prometheus o EFS.
+    # Aquí usamos emptyDir, es decir, el almacenamiento será efímero.
+    storageSpec:
+      emptyDir:
+        medium: ""
+    retention: 2d
+
+grafana:
+  enabled: true
+  adminPassword: "admin"
+  
+  # Fargate NO soporta volúmenes EBS, así que quitamos la persistencia local
+  persistence:
+    enabled: false
+    
+  # Configuración para que funcione bajo el path /grafana del Ingress
+  grafana.ini:
+    server:
+      domain: localhost
+      root_url: "%(protocol)s://%(domain)s/grafana"
+      serve_from_sub_path: true
